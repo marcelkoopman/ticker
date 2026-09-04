@@ -1,0 +1,18 @@
+[[assets]]
+name = "Bitcoin"
+url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=eur"
+# Path to the price value (dot notation)
+price_path = "bitcoin.eur"
+unit = "EUR"
+
+[[assets]]
+name = "Gold"
+url = "https://api.goldprice.dev/v1/prices?symbol=XAU-EUR-SPOT"
+price_path = "symbols.0.price"
+unit = "EUR (troy ounce)"
+
+[[assets]]
+name = "TTF Gas"
+url = "https://eurooilwatch.com/api/v1/gas"
+price_path = "ttf.priceEurMwh"
+unit = "EUR/MWh"
