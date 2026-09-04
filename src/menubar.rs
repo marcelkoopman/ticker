@@ -214,30 +214,30 @@ impl ApplicationHandler for App {
 }
 
 pub fn run_menubar() -> Result<(), Box<dyn Error>> {
+    eprintln!("🔧 Initializing menubar...");
+
     let mut links = HashMap::new();
     links.insert("bitcoin".to_string(), "https://bitcoin.nl".to_string());
-    links.insert(
-        "gold".to_string(),
-        "https://www.inkoopedelmetaal.nl/goud-verkopen/gouden-munten".to_string(),
-    );
-    links.insert(
-        "ttf_gas".to_string(),
-        "https://tradingeconomics.com/commodity/eu-natural-gas".to_string(),
-    );
+    links.insert("gold".to_string(), "https://www.inkoopedelmetaal.nl/goud-verkopen/gouden-munten".to_string());
+    links.insert("ttf_gas".to_string(), "https://tradingeconomics.com/commodity/eu-natural-gas".to_string());
 
-    // Initial fetch
+    eprintln!("💰 Fetching prices...");
     let prices = fetch_prices()?;
+    eprintln!("✓ Got {} prices", prices.len());
+
     let timestamp = current_timestamp();
+    eprintln!("⏰ Building menu with timestamp: {}", timestamp);
     let menu = build_menu(&prices, &timestamp);
 
+    eprintln!("🎯 Creating tray icon...");
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("Price Ticker")
         .with_title("ticker")
         .build()?;
 
+    eprintln!("✓ Tray icon created, running event loop...");
     let tray = Arc::new(Mutex::new(tray_icon));
-
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
