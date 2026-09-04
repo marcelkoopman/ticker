@@ -102,17 +102,26 @@ fn format_price(price: f64) -> String {
     }
 }
 
-fn build_menu(prices: &[(String, f64, String)], timestamp: &str) -> Menu {
+fn build_menu(
+    prices: &[(String, f64, String)],
+    timestamp: &str
+) -> Menu {
     let menu = Menu::new();
 
-    // Prices with em-dash format on single line
+    // Prices with emoji symbols
     for (name, price, unit) in prices {
+        let symbol = match name.as_str() {
+            "Bitcoin" => "₿",
+            "Gold"    => "🟡",
+            "TTF Gas" => "🔥",
+            _         => "•",
+        };
+
         let formatted_price = format_price(*price);
 
-        // Format: Name — Price Unit
-        let row = format!("{} — {} {}", name, formatted_price, unit);
+        // Format: Symbol Name — Price Unit
+        let row = format!("{} {} — {} {}", symbol, name, formatted_price, unit);
 
-        // Create menu item with unique ID based on name
         let item_id = name.to_lowercase().replace(" ", "_");
         let item = MenuItem::with_id(&item_id, &row, true, None);
         let _ = menu.append(&item);
