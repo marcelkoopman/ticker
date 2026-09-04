@@ -46,22 +46,20 @@ fn get_value_by_path(value: &Value, path: &str) -> Option<Value> {
 }
 
 fn fetch_prices() -> Result<Vec<(String, f64, String)>, Box<dyn Error>> {
-    // Try to find config.toml in app bundle Resources, then fallback to current directory
-    let config_path = if let Ok(exe_path) = std::env::current_exe() {
-        // Running from .app bundle
-        exe_path
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
-            .map(|p| p.join("Resources/config.toml"))
-            .filter(|p| p.exists())
-            .unwrap_or_else(|| "config.toml".into())
-    } else {
-        "config.toml".into()
-    };
+    eprintln!("📋 Looking for config.toml in bundle...");
+
+    let exe_path = std::env::current_exe()?;
+    let config_path = exe_path
+        .parent()
+        .ok_or("Cannot determine executable parent")?
+        .parent()
+        .ok_or("Cannot determine Contents directory")?
+        .join("Resources/config.toml");
+
+    eprintln!("📂 Reading config from: {:?}", config_path);
 
     let config_str = fs::read_to_string(&config_path)
-        .map_err(|e| format!("Could not read config from {:?}: {}", config_path, e))?;
+        .map_err(|e| format!("Failed to read {:?}: {}", config_path, e))?;
 
     let config: Config = toml::from_str(&config_str)?;
 
@@ -72,7 +70,6 @@ fn fetch_prices() -> Result<Vec<(String, f64, String)>, Box<dyn Error>> {
     let mut results = Vec::new();
 
     for asset in config.assets {
-        // Try to fetch and parse price, use NaN if it fails
         let price = match client.get(&asset.url).send() {
             Ok(response) => match response.error_for_status() {
                 Ok(resp) => match resp.json::<Value>() {
