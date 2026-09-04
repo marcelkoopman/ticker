@@ -2,6 +2,7 @@ use chrono::Local;
 use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -9,6 +10,7 @@ use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     TrayIcon, TrayIconBuilder,
 };
+use webbrowser;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -77,20 +79,42 @@ fn current_timestamp() -> String {
     Local::now().format("%H:%M:%S").to_string()
 }
 
+fn format_price(price: f64) -> String {
+    let formatted = format!("{:.2}", price);
+    let parts: Vec<&str> = formatted.split('.').collect();
+
+    if parts.len() == 2 {
+        let integer_part = parts[0];
+        let decimal_part = parts[1];
+
+        // Add thousands separator to integer part
+        let mut result = String::new();
+        for (i, ch) in integer_part.chars().rev().enumerate() {
+            if i > 0 && i % 3 == 0 {
+                result.insert(0, '.');
+            }
+            result.insert(0, ch);
+        }
+
+        format!("{},{}", result, decimal_part)
+    } else {
+        formatted
+    }
+}
+
 fn build_menu(prices: &[(String, f64, String)], timestamp: &str) -> Menu {
     let menu = Menu::new();
 
-    // Prices with symbols
+    // Prices with em-dash format on single line
     for (name, price, unit) in prices {
-        let (symbol, label) = match name.as_str() {
-            "Bitcoin" => ("₿", format!("Bitcoin   {:>10.2} {}", price, unit)),
-            "Gold"    => ("🟡", format!("Gold      {:>10.2} {}", price, unit)),
-            "TTF Gas" => ("🔥", format!("TTF Gas   {:>10.2} {}", price, unit)),
-            _         => ("•",  format!("{}   {:>10.2} {}", name, price, unit)),
-        };
+        let formatted_price = format_price(*price);
 
-        // true = normal (enabled) appearance
-        let item = MenuItem::new(&format!("{}  {}", symbol, label), true, None);
+        // Format: Name — Price Unit
+        let row = format!("{} — {} {}", name, formatted_price, unit);
+
+        // Create menu item with unique ID based on name
+        let item_id = name.to_lowercase().replace(" ", "_");
+        let item = MenuItem::with_id(&item_id, &row, true, None);
         let _ = menu.append(&item);
     }
 
@@ -112,6 +136,7 @@ fn build_menu(prices: &[(String, f64, String)], timestamp: &str) -> Menu {
 
 struct App {
     tray: Arc<Mutex<TrayIcon>>,
+    links: HashMap<String, String>,
 }
 
 impl ApplicationHandler for App {
@@ -135,20 +160,36 @@ impl ApplicationHandler for App {
                     // Re-fetch prices and update the menu
                     if let Ok(prices) = fetch_prices() {
                         let timestamp = current_timestamp();
-                        let new_menu = build_menu(&prices, &timestamp);
+                        let new_menu = build_menu(&prices, &timestamp); // Remove &self.links
 
                         if let Ok(tray) = self.tray.lock() {
                             let _ = tray.set_menu(Some(Box::new(new_menu)));
                         }
                     }
                 }
-                _ => {}
+                id => {
+                    // Handle asset links
+                    if let Some(url) = self.links.get(id) {
+                        let _ = webbrowser::open(url);
+                    }
+                }
             }
         }
     }
 }
 
 pub fn run_menubar() -> Result<(), Box<dyn Error>> {
+    let mut links = HashMap::new();
+    links.insert("bitcoin".to_string(), "https://bitcoin.nl".to_string());
+    links.insert(
+        "gold".to_string(),
+        "https://www.inkoopedelmetaal.nl/goud-verkopen/gouden-munten".to_string(),
+    );
+    links.insert(
+        "ttf_gas".to_string(),
+        "https://tradingeconomics.com/commodity/eu-natural-gas".to_string(),
+    );
+
     // Initial fetch
     let prices = fetch_prices()?;
     let timestamp = current_timestamp();
@@ -165,7 +206,7 @@ pub fn run_menubar() -> Result<(), Box<dyn Error>> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let mut app = App { tray };
+    let mut app = App { tray, links };
     event_loop.run_app(&mut app)?;
 
     Ok(())
