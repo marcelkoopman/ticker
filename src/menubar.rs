@@ -46,7 +46,23 @@ fn get_value_by_path(value: &Value, path: &str) -> Option<Value> {
 }
 
 fn fetch_prices() -> Result<Vec<(String, f64, String)>, Box<dyn Error>> {
-    let config_str = fs::read_to_string("config.toml")?;
+    // Try to find config.toml in app bundle Resources, then fallback to current directory
+    let config_path = if let Ok(exe_path) = std::env::current_exe() {
+        // Running from .app bundle
+        exe_path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .map(|p| p.join("Resources/config.toml"))
+            .filter(|p| p.exists())
+            .unwrap_or_else(|| "config.toml".into())
+    } else {
+        "config.toml".into()
+    };
+
+    let config_str = fs::read_to_string(&config_path)
+        .map_err(|e| format!("Could not read config from {:?}: {}", config_path, e))?;
+
     let config: Config = toml::from_str(&config_str)?;
 
     let client = Client::builder()
@@ -56,20 +72,29 @@ fn fetch_prices() -> Result<Vec<(String, f64, String)>, Box<dyn Error>> {
     let mut results = Vec::new();
 
     for asset in config.assets {
-        let response = client
-            .get(&asset.url)
-            .send()?
-            .error_for_status()?
-            .json::<Value>()?;
+        // Try to fetch and parse price, use NaN if it fails
+        let price = match client.get(&asset.url).send() {
+            Ok(response) => match response.error_for_status() {
+                Ok(resp) => match resp.json::<Value>() {
+                    Ok(json) => {
+                        if let Some(price_value) = get_value_by_path(&json, &asset.price_path) {
+                            match price_value {
+                                Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
+                                Value::String(s) => s.parse().unwrap_or(f64::NAN),
+                                _ => f64::NAN,
+                            }
+                        } else {
+                            f64::NAN
+                        }
+                    }
+                    Err(_) => f64::NAN,
+                },
+                Err(_) => f64::NAN,
+            },
+            Err(_) => f64::NAN,
+        };
 
-        if let Some(price_value) = get_value_by_path(&response, &asset.price_path) {
-            let price = match price_value {
-                Value::Number(n) => n.as_f64().unwrap_or(0.0),
-                Value::String(s) => s.parse().unwrap_or(0.0),
-                _ => 0.0,
-            };
-            results.push((asset.name, price, asset.unit));
-        }
+        results.push((asset.name, price, asset.unit));
     }
 
     Ok(results)
@@ -80,6 +105,10 @@ fn current_timestamp() -> String {
 }
 
 fn format_price(price: f64) -> String {
+    if price.is_nan() {
+        return "?".to_string();
+    }
+
     let formatted = format!("{:.2}", price);
     let parts: Vec<&str> = formatted.split('.').collect();
 
@@ -102,19 +131,16 @@ fn format_price(price: f64) -> String {
     }
 }
 
-fn build_menu(
-    prices: &[(String, f64, String)],
-    timestamp: &str
-) -> Menu {
+fn build_menu(prices: &[(String, f64, String)], timestamp: &str) -> Menu {
     let menu = Menu::new();
 
     // Prices with emoji symbols
     for (name, price, unit) in prices {
         let symbol = match name.as_str() {
             "Bitcoin" => "₿",
-            "Gold"    => "🟡",
+            "Gold" => "🟡",
             "TTF Gas" => "🔥",
-            _         => "•",
+            _ => "•",
         };
 
         let formatted_price = format_price(*price);

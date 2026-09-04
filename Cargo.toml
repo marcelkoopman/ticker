@@ -7,6 +7,7 @@ edition = "2021"
 name = "Ticker"
 identifier = "com.github.marcelkoopman.ticker"
 icon = ["assets/icon.icns"]
+resources = ["config.toml"]
 version = "0.1.0"
 category = "Utilities"
 short_description = "Price Ticker"
