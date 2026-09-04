@@ -5,10 +5,11 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     TrayIcon, TrayIconBuilder,
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 use webbrowser;
 use winit::{
@@ -45,17 +46,27 @@ fn get_value_by_path(value: &Value, path: &str) -> Option<Value> {
     Some(current.clone())
 }
 
-fn fetch_prices() -> Result<Vec<(String, f64, String)>, Box<dyn Error>> {
-    eprintln!("📋 Looking for config.toml in bundle...");
-
+fn config_path() -> Result<PathBuf, Box<dyn Error>> {
     let exe_path = std::env::current_exe()?;
-    let config_path = exe_path
-        .parent()
-        .ok_or("Cannot determine executable parent")?
-        .parent()
-        .ok_or("Cannot determine Contents directory")?
-        .join("Resources/config.toml");
 
+    // If we're inside a macOS .app bundle, use Resources/config.toml
+    if let Some(app_dir) = exe_path.ancestors().find(|p| {
+        p.file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.ends_with(".app"))
+            .unwrap_or(false)
+    }) {
+        return Ok(app_dir.join("Contents/Resources/config.toml"));
+    }
+
+    // Otherwise, use the project root config.toml for cargo run
+    Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.toml"))
+}
+
+fn fetch_prices() -> Result<Vec<(String, f64, String)>, Box<dyn Error>> {
+    eprintln!("📋 Looking for config.toml...");
+
+    let config_path = config_path()?;
     eprintln!("📂 Reading config from: {:?}", config_path);
 
     let config_str = fs::read_to_string(&config_path)
@@ -169,6 +180,7 @@ fn build_menu(prices: &[(String, f64, String)], timestamp: &str) -> Menu {
 struct App {
     tray: Arc<Mutex<TrayIcon>>,
     links: HashMap<String, String>,
+    startup_fetch_done: bool,
 }
 
 impl ApplicationHandler for App {
@@ -183,24 +195,41 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Fetch once after the tray/menu has been created
+        if !self.startup_fetch_done {
+            self.startup_fetch_done = true;
+
+            eprintln!("💰 Fetching initial prices...");
+            match fetch_prices() {
+                Ok(prices) => {
+                    eprintln!("✓ Got {} prices", prices.len());
+                    let timestamp = current_timestamp();
+                    let new_menu = build_menu(&prices, &timestamp);
+
+                    if let Ok(tray) = self.tray.lock() {
+                        tray.set_menu(Some(Box::new(new_menu)));
+                    }
+                }
+                Err(e) => eprintln!("✗ Failed to fetch prices: {}", e),
+            }
+        }
+
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             match event.id.0.as_str() {
                 "quit" => {
                     event_loop.exit();
                 }
                 "poll" => {
-                    // Re-fetch prices and update the menu
                     if let Ok(prices) = fetch_prices() {
                         let timestamp = current_timestamp();
-                        let new_menu = build_menu(&prices, &timestamp); // Remove &self.links
+                        let new_menu = build_menu(&prices, &timestamp);
 
                         if let Ok(tray) = self.tray.lock() {
-                            let _ = tray.set_menu(Some(Box::new(new_menu)));
+                            tray.set_menu(Some(Box::new(new_menu)));
                         }
                     }
                 }
                 id => {
-                    // Handle asset links
                     if let Some(url) = self.links.get(id) {
                         let _ = webbrowser::open(url);
                     }
@@ -211,34 +240,47 @@ impl ApplicationHandler for App {
 }
 
 pub fn run_menubar() -> Result<(), Box<dyn Error>> {
+    eprintln!("🎯 Ticker app started");
+    eprintln!("🚀 Ticker app starting...");
     eprintln!("🔧 Initializing menubar...");
 
     let mut links = HashMap::new();
     links.insert("bitcoin".to_string(), "https://bitcoin.nl".to_string());
-    links.insert("gold".to_string(), "https://www.inkoopedelmetaal.nl/goud-verkopen/gouden-munten".to_string());
-    links.insert("ttf_gas".to_string(), "https://tradingeconomics.com/commodity/eu-natural-gas".to_string());
+    links.insert(
+        "gold".to_string(),
+        "https://www.inkoopedelmetaal.nl/goud-verkopen/gouden-munten".to_string(),
+    );
+    links.insert(
+        "ttf_gas".to_string(),
+        "https://tradingeconomics.com/commodity/eu-natural-gas".to_string(),
+    );
 
-    eprintln!("💰 Fetching prices...");
-    let prices = fetch_prices()?;
-    eprintln!("✓ Got {} prices", prices.len());
+    // Create initial menu with "Loading..."
+    eprintln!("🎯 Creating tray icon with loading state...");
+    let initial_menu = Menu::new();
+    let _ = initial_menu.append(&MenuItem::new("⏳ Loading prices...", false, None));
+    let _ = initial_menu.append(&PredefinedMenuItem::separator());
+    let _ = initial_menu.append(&MenuItem::with_id("poll", "🔄  Poll again", true, None));
+    let _ = initial_menu.append(&PredefinedMenuItem::separator());
+    let _ = initial_menu.append(&MenuItem::with_id("quit", " Quit", true, None));
 
-    let timestamp = current_timestamp();
-    eprintln!("⏰ Building menu with timestamp: {}", timestamp);
-    let menu = build_menu(&prices, &timestamp);
-
-    eprintln!("🎯 Creating tray icon...");
     let tray_icon = TrayIconBuilder::new()
-        .with_menu(Box::new(menu))
+        .with_menu(Box::new(initial_menu))
         .with_tooltip("Price Ticker")
         .with_title("ticker")
         .build()?;
 
-    eprintln!("✓ Tray icon created, running event loop...");
     let tray = Arc::new(Mutex::new(tray_icon));
+    eprintln!("✓ Tray icon created, fetching prices in background...");
+
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
-    let mut app = App { tray, links };
+    let mut app = App {
+        tray,
+        links,
+        startup_fetch_done: false,
+    };
     event_loop.run_app(&mut app)?;
 
     Ok(())
