@@ -3,6 +3,15 @@ name = "ticker"
 version = "0.1.0"
 edition = "2021"
 
+[package.metadata.bundle]
+name = "Ticker"
+identifier = "com.github.marcelkoopman.ticker"
+icon = ["assets/icon.icns"]
+version = "0.1.0"
+category = "Utilities"
+short_description = "Price Ticker"
+long_description = "A menubar price ticker for Bitcoin, Gold, and TTF Gas"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
 reqwest = { version = "0.13", features = ["blocking", "json"] }
