@@ -1,18 +1,26 @@
+use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
-use std::error::Error;
 use std::process;
 
-fn get_lock_file_path() -> PathBuf {
+fn default_lock_file_path() -> PathBuf {
     let home = dirs::home_dir().expect("Cannot find home directory");
     home.join(".ticker.lock")
 }
 
+fn lock_file_path() -> PathBuf {
+    if let Ok(path) = std::env::var("TICKER_LOCK_PATH") {
+        PathBuf::from(path)
+    } else {
+        default_lock_file_path()
+    }
+}
+
 fn is_process_running(pid: u32) -> bool {
-    // Check of process nog bestaat
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
+
         Command::new("kill")
             .arg("-0")
             .arg(pid.to_string())
@@ -27,85 +35,123 @@ fn is_process_running(pid: u32) -> bool {
     }
 }
 
-pub fn try_acquire_lock() -> Result<(), Box<dyn Error>> {
-    let lock_file = get_lock_file_path();
+fn try_acquire_lock_at(lock_file: &PathBuf) -> Result<(), Box<dyn Error>> {
     let current_pid = process::id();
 
-    // Check of lock file bestaat
     if lock_file.exists() {
-        // Lees PID uit lock file
-        if let Ok(contents) = fs::read_to_string(&lock_file) {
+        if let Ok(contents) = fs::read_to_string(lock_file) {
             if let Ok(old_pid) = contents.trim().parse::<u32>() {
-                // Check of oud proces nog draait
                 if is_process_running(old_pid) {
                     eprintln!("❌ Ticker is already running (PID: {})!", old_pid);
                     return Err("Ticker is already running!".into());
                 } else {
-                    eprintln!("🧹 Cleaning up stale lock file (PID: {} not running)", old_pid);
-                    let _ = fs::remove_file(&lock_file);
+                    eprintln!(
+                        "🧹 Cleaning up stale lock file (PID: {} not running)",
+                        old_pid
+                    );
+                    let _ = fs::remove_file(lock_file);
                 }
+            } else {
+                let _ = fs::remove_file(lock_file);
             }
+        } else {
+            let _ = fs::remove_file(lock_file);
         }
     }
 
-    // Maak nieuwe lock file met huidige PID
-    fs::write(&lock_file, current_pid.to_string())?;
+    fs::write(lock_file, current_pid.to_string())?;
     eprintln!("🔒 Lock acquired (PID: {})", current_pid);
     Ok(())
 }
 
-pub fn release_lock() {
-    let lock_file = get_lock_file_path();
-
-    // Controleer of het onze lock is voordat we hem verwijderen
-    if let Ok(contents) = fs::read_to_string(&lock_file) {
-        if let Ok(pid) = contents.trim().parse::<u32>() {
-            if pid == process::id() {
-                let _ = fs::remove_file(&lock_file);
-                eprintln!("🔓 Lock released");
-            }
-        }
+fn release_lock_at(lock_file: &PathBuf) {
+    if let Ok(contents) = fs::read_to_string(lock_file)
+        && let Ok(pid) = contents.trim().parse::<u32>()
+        && pid == process::id()
+    {
+        let _ = fs::remove_file(lock_file);
+        eprintln!("🔓 Lock released");
     }
+}
+
+pub fn try_acquire_lock() -> Result<(), Box<dyn Error>> {
+    let lock_file = lock_file_path();
+    try_acquire_lock_at(&lock_file)
+}
+
+pub fn release_lock() {
+    let lock_file = lock_file_path();
+    release_lock_at(&lock_file);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_test_lock_path(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        std::env::temp_dir().join(format!("ticker-{}-{}.lock", name, stamp))
+    }
 
     #[test]
     fn test_acquire_lock_success() {
-        // Cleanup first
-        let lock_file = get_lock_file_path();
+        let lock_file = unique_test_lock_path("acquire_success");
         let _ = fs::remove_file(&lock_file);
 
-        assert!(try_acquire_lock().is_ok());
-        release_lock();
+        assert!(try_acquire_lock_at(&lock_file).is_ok());
+
+        release_lock_at(&lock_file);
+        let _ = fs::remove_file(&lock_file);
     }
 
     #[test]
     fn test_lock_contains_pid() {
-        let lock_file = get_lock_file_path();
+        let lock_file = unique_test_lock_path("contains_pid");
         let _ = fs::remove_file(&lock_file);
 
-        let _ = try_acquire_lock();
+        assert!(try_acquire_lock_at(&lock_file).is_ok());
+
+        let contents = fs::read_to_string(&lock_file).unwrap();
+        let pid: u32 = contents.trim().parse().unwrap();
+
+        assert_eq!(pid, process::id());
+
+        release_lock_at(&lock_file);
+        let _ = fs::remove_file(&lock_file);
+    }
+
+    #[test]
+    fn test_stale_lock_cleanup() {
+        let lock_file = unique_test_lock_path("stale_cleanup");
+        let _ = fs::remove_file(&lock_file);
+
+        // Schrijf een fake PID
+        fs::write(&lock_file, "999999").unwrap();
+
+        assert!(try_acquire_lock_at(&lock_file).is_ok());
 
         let contents = fs::read_to_string(&lock_file).unwrap();
         let pid: u32 = contents.trim().parse().unwrap();
         assert_eq!(pid, process::id());
 
-        release_lock();
+        release_lock_at(&lock_file);
+        let _ = fs::remove_file(&lock_file);
     }
 
     #[test]
-    fn test_stale_lock_cleanup() {
-        let lock_file = get_lock_file_path();
+    fn test_release_lock_removes_file() {
+        let lock_file = unique_test_lock_path("release_removes");
         let _ = fs::remove_file(&lock_file);
 
-        // Schrijf fake PID (9999 bestaat niet)
-        fs::write(&lock_file, "9999").unwrap();
+        assert!(try_acquire_lock_at(&lock_file).is_ok());
+        release_lock_at(&lock_file);
 
-        // Acquire zou moeten slagen want 9999 draait niet
-        assert!(try_acquire_lock().is_ok());
-        release_lock();
+        assert!(!lock_file.exists());
+        let _ = fs::remove_file(&lock_file);
     }
 }
