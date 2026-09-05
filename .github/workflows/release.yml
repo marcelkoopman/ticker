@@ -5,6 +5,9 @@ on:
     tags:
       - "v*"
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   build:
     name: Build DMG
@@ -22,9 +25,13 @@ jobs:
       - name: Build DMG
         run: cargo bundle --release
 
+      - name: Find DMG file
+        run: find target/release/bundle -name "*.dmg" -type f
+
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: target/release/bundle/osx/*.dmg
+          token: ${{ secrets.GITHUB_TOKEN }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
