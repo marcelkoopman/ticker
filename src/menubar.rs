@@ -1,137 +1,24 @@
-use crate::config::load_config;
-use crate::menu_builder::build_menu_with_next_poll;
-use crate::models::Price;
-use crate::price_fetcher::fetch_prices;
-use crate::price_history;
-
-use chrono::{Duration as ChronoDuration, Local};
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::error::Error;
-use std::rc::Rc;
-use std::sync::mpsc;
-use std::thread;
-use std::time::{Duration, Instant};
-use tray_icon::{
-    TrayIcon, TrayIconBuilder,
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
-};
-use winit::{
-    application::ApplicationHandler,
-    event::WindowEvent,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
+use tray_icon::{TrayIcon, TrayIconBuilder, menu::{Menu, MenuItem, PredefinedMenuItem, MenuEvent}};
+use winit::{application::ApplicationHandler, event::WindowEvent, event_loop::{ActiveEventLoop, ControlFlow, EventLoop}};
+use webbrowser;
 
-struct AssetPoller {
-    last_poll: Instant,
-    #[allow(dead_code)]
-    poll_interval_seconds: u64,
-}
+use crate::config::load_config;
+use crate::price_fetcher::PriceFetcher;
+use crate::poller::Poller;
+use crate::menu_builder::MenuBuilder;
 
 struct App {
-    tray: Rc<RefCell<TrayIcon>>,
+    tray: Arc<Mutex<TrayIcon>>,
+    fetcher: PriceFetcher,
+    poller: Poller,
+    config: crate::config::Config,
     links: HashMap<String, String>,
-    startup_fetch_done: bool,
-    fetch_in_progress: bool,
-    prices: Vec<Price>,
-    asset_pollers: HashMap<String, AssetPoller>,
-    next_poll_time_str: String,
-    last_update_timestamp: String,
-    tx: mpsc::Sender<Vec<Price>>,
-    rx: mpsc::Receiver<Vec<Price>>,
-    asset_names: Vec<String>,
-    poll_intervals: HashMap<String, u64>,
-}
-
-fn current_timestamp() -> String {
-    Local::now().format("%H:%M:%S").to_string()
-}
-
-fn format_next_poll_time(seconds_until: u64) -> String {
-    let next_time = Local::now() + ChronoDuration::seconds(seconds_until as i64);
-    next_time.format("%H:%M:%S").to_string()
-}
-
-fn spawn_price_fetcher(tx: mpsc::Sender<Vec<Price>>, _asset_names: Vec<String>) {
-    thread::spawn(move || {
-        if let Ok(config) = load_config()
-            && let Ok(prices) = fetch_prices(&config.assets)
-        {
-            let _ = tx.send(prices);
-        }
-    });
-}
-
-impl App {
-    fn refresh_tray(&self) {
-        let title = "Ticker".to_string();
-        let menu = build_menu_with_next_poll(
-            &self.prices,
-            &self.next_poll_time_str,
-            &self.last_update_timestamp,
-        );
-
-        let tray = self.tray.borrow_mut();
-        tray.set_title(Some(title.as_str()));
-        tray.set_menu(Some(Box::new(menu)));
-    }
-
-    fn start_background_fetch(&mut self) {
-        if !self.fetch_in_progress {
-            self.fetch_in_progress = true;
-            spawn_price_fetcher(self.tx.clone(), self.asset_names.clone());
-        }
-    }
-
-    fn should_poll_any_asset(&self) -> bool {
-        for asset_name in &self.asset_names {
-            if let Some(poller) = self.asset_pollers.get(asset_name)
-                && let Some(interval) = self.poll_intervals.get(asset_name)
-                && poller.last_poll.elapsed() >= Duration::from_secs(*interval)
-            {
-                return true;
-            }
-            if !self.asset_pollers.contains_key(asset_name) {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn update_asset_poll_times(&mut self) {
-        for asset_name in &self.asset_names {
-            if let Some(interval) = self.poll_intervals.get(asset_name) {
-                self.asset_pollers.insert(
-                    asset_name.clone(),
-                    AssetPoller {
-                        last_poll: Instant::now(),
-                        poll_interval_seconds: *interval,
-                    },
-                );
-            }
-        }
-    }
-
-    fn calculate_next_poll_time(&self) -> String {
-        let mut min_seconds = u64::MAX;
-
-        for asset_name in &self.asset_names {
-            if let Some(poller) = self.asset_pollers.get(asset_name)
-                && let Some(interval) = self.poll_intervals.get(asset_name)
-            {
-                let elapsed = poller.last_poll.elapsed().as_secs();
-                let remaining = interval.saturating_sub(elapsed);
-                if remaining < min_seconds {
-                    min_seconds = remaining;
-                }
-            }
-        }
-
-        if min_seconds == u64::MAX {
-            return "calculating...".to_string();
-        }
-        format_next_poll_time(min_seconds)
-    }
+    prices: Vec<(String, f64, String)>,
+    price_history: HashMap<String, f64>,
+    next_check: SystemTime,
 }
 
 impl ApplicationHandler for App {
@@ -142,67 +29,17 @@ impl ApplicationHandler for App {
         _event_loop: &ActiveEventLoop,
         _id: winit::window::WindowId,
         _event: WindowEvent,
-    ) {
-    }
+    ) {}
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.startup_fetch_done {
-            self.startup_fetch_done = true;
-            eprintln!("💰 Fetching initial prices...");
-
-            if let Ok(config) = load_config() {
-                match fetch_prices(&config.assets) {
-                    Ok(prices) => {
-                        eprintln!("✓ Got {} prices", prices.len());
-                        self.prices = prices.clone();
-
-                        for price in &prices {
-                            let _ = price_history::update_price_history(&price.name, price.value);
-                        }
-
-                        self.update_asset_poll_times();
-                        self.last_update_timestamp = current_timestamp();
-                        self.next_poll_time_str = self.calculate_next_poll_time();
-                        self.fetch_in_progress = false;
-                        self.refresh_tray();
-                    }
-                    Err(e) => {
-                        eprintln!("✗ Failed to fetch prices: {}", e);
-                    }
-                }
-            }
-            return;
-        }
-
-        if let Ok(new_prices) = self.rx.try_recv() {
-            eprintln!("✓ Got prices from background thread");
-            self.prices = new_prices.clone();
-
-            for price in &self.prices {
-                let _ = price_history::update_price_history(&price.name, price.value);
-            }
-
-            self.fetch_in_progress = false;
-            self.update_asset_poll_times();
-            self.last_update_timestamp = current_timestamp();
-            self.next_poll_time_str = self.calculate_next_poll_time();
-            self.refresh_tray();
-        }
-
-        if self.should_poll_any_asset() && !self.fetch_in_progress {
-            eprintln!("⏱️ Auto-polling triggered");
-            self.start_background_fetch();
-        }
-
+        // Check for menu clicks
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             match event.id.0.as_str() {
-                "quit" => {
-                    eprintln!("👋 Quitting...");
-                    event_loop.exit();
-                }
+                "quit" => event_loop.exit(),
                 "poll" => {
                     eprintln!("🔄 Manual poll triggered");
-                    self.start_background_fetch();
+                    self.poll_due_assets(true);
+                    self.update_next_check();
                 }
                 id => {
                     if let Some(url) = self.links.get(id) {
@@ -211,38 +48,132 @@ impl ApplicationHandler for App {
                 }
             }
         }
+
+        // Auto-poll when due
+        if SystemTime::now() >= self.next_check {
+            eprintln!("⏰ Auto-poll triggered");
+            self.poll_due_assets(false);
+            self.update_next_check();
+        }
+
+        // Update control flow to wake up at next check time
+        if let Ok(duration) = self.next_check.duration_since(SystemTime::now()) {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                std::time::Instant::now() + duration
+            ));
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
     }
 }
 
-pub fn initialize_app() -> Result<(), Box<dyn Error>> {
-    eprintln!("🚀 Ticker app starting...");
-    eprintln!("🔧 Initializing menubar...");
+impl App {
+    fn poll_due_assets(&mut self, force: bool) {
+        let new_prices = self.fetcher.fetch_all(&self.config.assets);
+
+        eprintln!("🔍 Checking {} assets for updates...", new_prices.len());
+
+        let mut updated_count = 0;
+        let mut updates = Vec::new();
+
+        for (new_name, new_price, new_unit) in &new_prices {
+            // Skip if not due AND not forced
+            if !force && !self.poller.should_poll(new_name) {
+                eprintln!("  ⏭️  {} (not due yet)", new_name);
+                continue;
+            }
+
+            // Get OLD price
+            let old_price = self.price_history.get(new_name).copied();
+
+            let price_str = if new_price.is_nan() { "?".to_string() } else { format!("{:.2}", new_price) };
+            let change_note = if let Some(old) = old_price {
+                if (old - new_price).abs() < 0.01 {
+                    " (no change)".to_string()
+                } else {
+                    let diff = new_price - old;
+                    let sign = if diff > 0.0 { "+" } else { "" };
+                    format!(" ({}{:.2})", sign, diff)
+                }
+            } else {
+                "".to_string()
+            };
+
+            // Update current prices
+            if let Some(pos) = self.prices.iter().position(|(name, _, _)| name == new_name) {
+                self.prices[pos] = (new_name.clone(), *new_price, new_unit.clone());
+            } else {
+                self.prices.push((new_name.clone(), *new_price, new_unit.clone()));
+            }
+
+            self.poller.mark_polled(new_name, &self.config.assets);
+            eprintln!("  ✓ {} → {} {}{}", new_name, price_str, new_unit, change_note);
+            updated_count += 1;
+
+            updates.push((new_name.clone(), *new_price));
+        }
+
+        eprintln!("📊 Update complete: {} updated", updated_count);
+
+        self.update_menu();
+
+        for (name, price) in updates {
+            self.price_history.insert(name, price);
+        }
+    }
+
+    fn update_next_check(&mut self) {
+        let mut earliest = SystemTime::now() + std::time::Duration::from_secs(3600);
+        let mut earliest_asset = "unknown".to_string();
+
+        for asset in &self.config.assets {
+            if let Some(duration) = self.poller.time_until_poll(&asset.name) {
+                let next = SystemTime::now() + duration;
+                if next < earliest {
+                    earliest = next;
+                    earliest_asset = asset.name.clone();
+                }
+            }
+        }
+
+        self.next_check = earliest;
+        let secs = self.next_check.duration_since(SystemTime::now()).unwrap_or_default().as_secs();
+        eprintln!("⏱️  Next check: {}s ({})", secs, earliest_asset);
+    }
+
+    fn update_menu(&self) {
+        let prices_with_history: Vec<(String, f64, String, Option<f64>)> = self.prices
+            .iter()
+            .map(|(name, price, unit)| {
+                let prev = self.price_history.get(name).copied();
+                (name.clone(), *price, unit.clone(), prev)
+            })
+            .collect();
+
+        let menu = MenuBuilder::build(&prices_with_history, &self.poller);
+
+        if let Ok(tray) = self.tray.lock() {
+            tray.set_menu(Some(Box::new(menu)));
+        }
+    }
+}
+
+pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("🎯 Ticker app started");
 
     let config = load_config()?;
+    let fetcher = PriceFetcher::new()?;
+    let poller = Poller::new(&config.assets);
 
     let mut links = HashMap::new();
     links.insert("bitcoin".to_string(), "https://bitcoin.nl".to_string());
-    links.insert(
-        "gold".to_string(),
-        "https://www.inkoopedelmetaal.nl/goud-verkopen/gouden-munten".to_string(),
-    );
-    links.insert(
-        "ttf_gas".to_string(),
-        "https://tradingeconomics.com/commodity/eu-natural-gas".to_string(),
-    );
-
-    let mut asset_names = Vec::new();
-    let mut poll_intervals = HashMap::new();
-
-    for asset in &config.assets {
-        asset_names.push(asset.name.clone());
-        poll_intervals.insert(asset.name.clone(), asset.poll_interval_seconds());
-    }
+    links.insert("gold".to_string(), "https://xaus.com".to_string());
+    links.insert("ttf_gas".to_string(), "https://eurooilwatch.com".to_string());
 
     let initial_menu = Menu::new();
     let _ = initial_menu.append(&MenuItem::new("⏳ Loading prices...", false, None));
     let _ = initial_menu.append(&PredefinedMenuItem::separator());
-    let _ = initial_menu.append(&MenuItem::with_id("poll", "🔄 Fetching...", true, None));
+    let _ = initial_menu.append(&MenuItem::with_id("poll", "🔄  Poll now", true, None));
     let _ = initial_menu.append(&PredefinedMenuItem::separator());
     let _ = initial_menu.append(&MenuItem::with_id("quit", " Quit", true, None));
 
@@ -252,33 +183,24 @@ pub fn initialize_app() -> Result<(), Box<dyn Error>> {
         .with_title("Ticker")
         .build()?;
 
-    let tray = Rc::new(RefCell::new(tray_icon));
+    let tray = Arc::new(Mutex::new(tray_icon));
 
     let event_loop = EventLoop::new()?;
-    event_loop.set_control_flow(ControlFlow::Wait);
-
-    let (tx, rx) = mpsc::channel();
 
     let mut app = App {
         tray,
+        fetcher,
+        poller,
+        config,
         links,
-        startup_fetch_done: false,
-        fetch_in_progress: false,
         prices: Vec::new(),
-        asset_pollers: HashMap::new(),
-        next_poll_time_str: "loading...".to_string(),
-        last_update_timestamp: "never".to_string(),
-        tx,
-        rx,
-        asset_names,
-        poll_intervals,
+        price_history: HashMap::new(),
+        next_check: SystemTime::now(),
     };
 
+    app.poll_due_assets(true);
+    app.update_next_check();
+
     event_loop.run_app(&mut app)?;
-
     Ok(())
-}
-
-pub fn run_menubar() -> Result<(), Box<dyn Error>> {
-    initialize_app()
 }
