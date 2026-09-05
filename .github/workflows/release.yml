@@ -31,6 +31,25 @@ jobs:
       - name: Build app bundle
         run: cargo bundle --release --target aarch64-apple-darwin
 
+      - name: Copy assets into app bundle
+        run: |
+          APP="target/aarch64-apple-darwin/release/bundle/osx/Ticker.app"
+          RES="$APP/Contents/Resources"
+          mkdir -p "$RES/assets"
+
+          # Copy icon for DMG
+          cp -v assets/icon.icns "$RES/icon.icns"
+
+          # Copy runtime icons
+          cp -v assets/normal.png "$RES/assets/normal.png"
+          cp -v assets/update.png "$RES/assets/update.png"
+
+          # Verify
+          echo "=== Resources ==="
+          ls -lah "$RES"
+          echo "=== Assets ==="
+          ls -lah "$RES/assets"
+
       - name: Verify app bundle
         run: |
           echo "=== App bundle ==="

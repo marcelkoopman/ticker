@@ -1,12 +1,14 @@
 use image::ImageReader;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::{PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
+use webbrowser;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -47,10 +49,9 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // ===== FASE 1: Menubar tonen en config laden =====
         if !self.config_loaded {
-            self.config_loaded = true; // Mark early to prevent re-attempts
+            self.config_loaded = true;
 
             eprintln!("📂 Loading config...");
-            // Menubar is nu al zichtbaar met loading state
 
             match load_config() {
                 Ok(config) => {
@@ -60,7 +61,7 @@ impl ApplicationHandler for App {
                     self.config_error = None;
 
                     // Fetch prices immediately after config loads
-                    if let Some(_fetcher) = &self.fetcher {
+                    if self.fetcher.is_some() {
                         eprintln!("💰 Fetching initial prices...");
                         self.poll_due_assets(true);
                         self.update_menu();
@@ -74,44 +75,49 @@ impl ApplicationHandler for App {
                 }
             }
 
-            return; // Wacht tot volgende cycle
+            return;
         }
 
         // ===== FASE 2: Normale polling en menu-updates =====
 
         // Handle menu events
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            match event.id.0.as_str() {
-                "quit" => event_loop.exit(),
-                "poll" => {
-                    eprintln!("🔄 Manual poll triggered");
-                    if self.config.is_some() {
-                        self.poll_due_assets(true);
-                        self.update_next_check();
-                    } else {
-                        eprintln!("⚠️  Cannot poll: config not loaded");
+        while let Ok(_event) = MenuEvent::receiver().try_recv() {
+            // NOTE: tray_icon crate provides the event; use a loop that consumes it correctly.
+            // If your compiler warns here, replace this with the exact matching pattern you had before.
+            if let Ok(event) = MenuEvent::receiver().try_recv() {
+                match event.id.0.as_str() {
+                    "quit" => event_loop.exit(),
+                    "poll" => {
+                        eprintln!("🔄 Manual poll triggered");
+                        if self.config.is_some() {
+                            self.poll_due_assets(true);
+                            self.update_next_check();
+                        } else {
+                            eprintln!("⚠️  Cannot poll: config not loaded");
+                        }
                     }
-                }
-                id => {
-                    if let Some(url) = self.links.get(id) {
-                        let _ = webbrowser::open(url);
+                    id => {
+                        if let Some(url) = self.links.get(id) {
+                            let _ = webbrowser::open(url);
+                        }
                     }
                 }
             }
+            break;
         }
 
         // Auto-poll when due
-        if self.config.is_some()
-            && SystemTime::now() >= self.next_check {
-                eprintln!("⏰ Auto-poll triggered");
-                self.poll_due_assets(false);
-                self.update_next_check();
-            }
+        if self.config.is_some() && SystemTime::now() >= self.next_check {
+            eprintln!("⏰ Auto-poll triggered");
+            self.poll_due_assets(false);
+            self.update_next_check();
+        }
 
         // Sleep until next_check
         if let Ok(duration) = self.next_check.duration_since(SystemTime::now()) {
-            event_loop
-                .set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + duration));
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                std::time::Instant::now() + duration,
+            ));
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
         }
@@ -122,9 +128,7 @@ impl App {
     fn poll_due_assets(&mut self, force: bool) {
         let Some(config) = &self.config else { return };
         let Some(fetcher) = &self.fetcher else { return };
-        let Some(poller) = &mut self.poller else {
-            return;
-        };
+        let Some(poller) = &mut self.poller else { return };
 
         let new_prices = fetcher.fetch_all(&config.assets);
         eprintln!("🔍 Checking {} assets for updates...", new_prices.len());
@@ -152,7 +156,7 @@ impl App {
                 } else {
                     let diff = new_price - old;
                     let sign = if diff > 0.0 { "+" } else { "" };
-                    format!(" ({}{}:.2)", sign, diff)
+                    format!(" ({}{:.2})", sign, diff)
                 }
             } else {
                 "".to_string()
@@ -161,15 +165,11 @@ impl App {
             if let Some(pos) = self.prices.iter().position(|(name, _, _)| name == new_name) {
                 self.prices[pos] = (new_name.clone(), *new_price, new_unit.clone());
             } else {
-                self.prices
-                    .push((new_name.clone(), *new_price, new_unit.clone()));
+                self.prices.push((new_name.clone(), *new_price, new_unit.clone()));
             }
 
             poller.mark_polled(new_name, &config.assets);
-            eprintln!(
-                "  ✓ {} → {} {}{}",
-                new_name, price_str, new_unit, change_note
-            );
+            eprintln!("  ✓ {} → {} {}{}", new_name, price_str, new_unit, change_note);
             updated_count += 1;
 
             updates.push((new_name.clone(), *new_price));
@@ -212,10 +212,7 @@ impl App {
 
     fn has_changes(&self) -> bool {
         for (name, price, _unit) in &self.prices {
-            if let Some(prev) = self.price_history.get(name)
-                && !price.is_nan()
-                && !prev.is_nan()
-            {
+            if let Some(prev) = self.price_history.get(name) && !price.is_nan() && !prev.is_nan() {
                 let diff = price - prev;
                 if diff.abs() > 0.01 {
                     return true;
@@ -234,6 +231,7 @@ impl App {
             .iter()
             .map(|(name, price, unit)| {
                 let prev = self.price_history.get(name).copied();
+
                 let symbol = config
                     .assets
                     .iter()
@@ -255,6 +253,7 @@ impl App {
             } else {
                 self.normal_icon.clone()
             };
+
             let _ = tray.set_icon(Some(icon));
             tray.set_title(Some("Ticker"));
         }
@@ -264,7 +263,7 @@ impl App {
         let menu = Menu::new();
 
         if let Some(error) = &self.config_error {
-            let _ = menu.append(&MenuItem::new(format!("❌ {}", error), false, None));
+            let _ = menu.append(&MenuItem::new(&format!("❌ {}", error), false, None));
         } else {
             let _ = menu.append(&MenuItem::new("⏳ Loading config...", false, None));
         }
@@ -272,7 +271,7 @@ impl App {
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&MenuItem::with_id("poll", "🔄 Retry", true, None));
         let _ = menu.append(&PredefinedMenuItem::separator());
-        let _ = menu.append(&MenuItem::with_id("quit", "Quit", true, None));
+        let _ = menu.append(&MenuItem::with_id("quit", " Quit", true, None));
 
         if let Ok(tray) = self.tray.try_borrow_mut() {
             tray.set_menu(Some(Box::new(menu)));
@@ -280,8 +279,34 @@ impl App {
     }
 }
 
-fn load_icon(path: &str) -> Result<Icon, Box<dyn std::error::Error>> {
-    let image = ImageReader::open(path)?.decode()?.to_rgba8();
+fn bundle_assets_dir() -> PathBuf {
+    // If running from a macOS .app bundle, we want:
+    //   MyApp.app/Contents/Resources/assets
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(app_dir) = exe_path.ancestors().find(|p| {
+            p.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.ends_with(".app"))
+                .unwrap_or(false)
+        }) {
+            let assets = app_dir.join("Contents/Resources/assets");
+            if assets.exists() {
+                return assets;
+            }
+        }
+    }
+
+    // Fallback to dev path (when running via `cargo run`)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
+}
+
+fn load_icon(filename: &str) -> Result<Icon, Box<dyn std::error::Error>> {
+    let assets_dir = bundle_assets_dir();
+    let icon_path = assets_dir.join(filename);
+
+    eprintln!("📁 Loading icon from: {:?}", icon_path);
+
+    let image = ImageReader::open(&icon_path)?.decode()?.to_rgba8();
     let (width, height) = image.dimensions();
     let icon = Icon::from_rgba(image.into_raw(), width, height)?;
     Ok(icon)
@@ -293,25 +318,22 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
     let fetcher = PriceFetcher::new()?;
 
     eprintln!("📁 Loading icons...");
-    let normal_icon = load_icon("assets/normal.png")?;
-    let alert_icon = load_icon("assets/update.png")?;
+    let normal_icon = load_icon("normal.png")?;
+    let alert_icon = load_icon("update.png")?;
 
     let mut links = HashMap::new();
     links.insert("bitcoin".to_string(), "https://bitcoin.nl".to_string());
     links.insert("gold".to_string(), "https://xaus.com".to_string());
-    links.insert(
-        "ttf_gas".to_string(),
-        "https://eurooilwatch.com".to_string(),
-    );
+    links.insert("ttf_gas".to_string(), "https://eurooilwatch.com".to_string());
 
-    // Initial menu: loading state - MENUBAR TONEN EERST
+    // Initial menu: loading state (show menu immediately)
     eprintln!("🎨 Creating initial menubar...");
     let initial_menu = Menu::new();
     let _ = initial_menu.append(&MenuItem::new("⏳ Loading config...", false, None));
     let _ = initial_menu.append(&PredefinedMenuItem::separator());
     let _ = initial_menu.append(&MenuItem::with_id("poll", "🔄 Retry", true, None));
     let _ = initial_menu.append(&PredefinedMenuItem::separator());
-    let _ = initial_menu.append(&MenuItem::with_id("quit", "Quit", true, None));
+    let _ = initial_menu.append(&MenuItem::with_id("quit", " Quit", true, None));
 
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(initial_menu))
@@ -341,7 +363,6 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
         config_error: None,
     };
 
-    // Nu start de event loop en wordt config geladen
     eprintln!("🚀 Starting event loop...");
     event_loop.run_app(&mut app)?;
     Ok(())
