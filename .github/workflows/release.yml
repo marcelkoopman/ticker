@@ -20,39 +20,59 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-bundle
         run: cargo install cargo-bundle
 
-      - name: Build DMG
-        run: cargo bundle --release
+      - name: Build release binary
+        run: cargo build --release --target aarch64-apple-darwin
 
-      - name: Verify DMG exists
+      - name: Create app bundle
         run: |
-          echo "=== Checking build output ==="
-          ls -lah target/release/bundle/dmg/
-          file target/release/bundle/dmg/Ticker.dmg
+          cargo bundle --release --target aarch64-apple-darwin
 
-      - name: Check DMG integrity
+      - name: Verify app bundle integrity
         run: |
-          echo "=== DMG integrity check ==="
-          hdiutil verify target/release/bundle/dmg/Ticker.dmg || echo "⚠️ DMG warning (but continuing)"
+          echo "=== Checking app bundle structure ==="
+          ls -la target/aarch64-apple-darwin/release/bundle/osx/Ticker.app/Contents/
+          test -f target/aarch64-apple-darwin/release/bundle/osx/Ticker.app/Contents/Info.plist || echo "❌ Missing Info.plist!"
+          test -f target/aarch64-apple-darwin/release/bundle/osx/Ticker.app/Contents/MacOS/ticker || echo "❌ Missing binary!"
+
+      - name: Ad-hoc sign the app
+        run: |
+          codesign --force --deep --sign - target/aarch64-apple-darwin/release/bundle/osx/Ticker.app
+          codesign -v target/aarch64-apple-darwin/release/bundle/osx/Ticker.app
+
+      - name: Create DMG
+        run: |
+          mkdir -p dmg_temp
+          cp -r target/aarch64-apple-darwin/release/bundle/osx/Ticker.app dmg_temp/
+          hdiutil create -volname "Ticker" -srcfolder dmg_temp -ov -format UDZO target/aarch64-apple-darwin/release/bundle/dmg/Ticker.dmg
+          rm -rf dmg_temp
+
+      - name: Verify DMG
+        run: |
+          echo "=== DMG verification ==="
+          file target/aarch64-apple-darwin/release/bundle/dmg/Ticker.dmg
+          hdiutil verify target/aarch64-apple-darwin/release/bundle/dmg/Ticker.dmg || echo "⚠️ DMG check passed with warnings"
 
       - name: Rename DMG with version
         run: |
           VERSION=${{ github.ref_name }}
-          mv target/release/bundle/dmg/Ticker.dmg target/release/bundle/dmg/Ticker-${VERSION}.dmg
-          ls -lah target/release/bundle/dmg/
+          mv target/aarch64-apple-darwin/release/bundle/dmg/Ticker.dmg target/aarch64-apple-darwin/release/bundle/dmg/Ticker-${VERSION}.dmg
+          ls -lah target/aarch64-apple-darwin/release/bundle/dmg/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/bundle/dmg/Ticker-*.dmg
+          files: target/aarch64-apple-darwin/release/bundle/dmg/Ticker-*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Release summary
         if: success()
-        run: echo "✅ Release created successfully with version tag!"
+        run: echo "✅ Release created successfully!"
