@@ -1,6 +1,6 @@
+use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
-use std::error::Error;
 
 fn get_lock_file_path() -> PathBuf {
     let home = dirs::home_dir().expect("Cannot find home directory");
