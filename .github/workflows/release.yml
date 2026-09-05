@@ -1,0 +1,30 @@
+name: Build Release DMG
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build DMG
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle
+
+      - name: Build DMG
+        run: cargo bundle --release
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: target/release/bundle/osx/*.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
