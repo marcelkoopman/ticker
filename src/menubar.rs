@@ -1,11 +1,9 @@
-use chrono::Local;
-use reqwest::blocking::Client;
-use serde::Deserialize;
-use serde_json::Value;
+use crate::config::load_config;
+use crate::price_fetcher::fetch_prices;
+use crate::formatter::current_timestamp;
+use crate::menu_builder::build_menu;
 use std::collections::HashMap;
 use std::error::Error;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tray_icon::{
     TrayIcon, TrayIconBuilder,
@@ -17,165 +15,6 @@ use winit::{
     event::WindowEvent,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
 };
-
-#[derive(Debug, Deserialize)]
-struct Config {
-    assets: Vec<Asset>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Asset {
-    name: String,
-    url: String,
-    price_path: String,
-    unit: String,
-}
-
-fn get_value_by_path(value: &Value, path: &str) -> Option<Value> {
-    let mut current = value;
-    for part in path.split('.') {
-        current = match current {
-            Value::Object(map) => map.get(part)?,
-            Value::Array(arr) => {
-                let index: usize = part.parse().ok()?;
-                arr.get(index)?
-            }
-            _ => return None,
-        };
-    }
-    Some(current.clone())
-}
-
-fn config_path() -> Result<PathBuf, Box<dyn Error>> {
-    let exe_path = std::env::current_exe()?;
-
-    // If we're inside a macOS .app bundle, use Resources/config.toml
-    if let Some(app_dir) = exe_path.ancestors().find(|p| {
-        p.file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name.ends_with(".app"))
-            .unwrap_or(false)
-    }) {
-        return Ok(app_dir.join("Contents/Resources/config.toml"));
-    }
-
-    // Otherwise, use the project root config.toml for cargo run
-    Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.toml"))
-}
-
-fn fetch_prices() -> Result<Vec<(String, f64, String)>, Box<dyn Error>> {
-    eprintln!("📋 Looking for config.toml...");
-
-    let config_path = config_path()?;
-    eprintln!("📂 Reading config from: {:?}", config_path);
-
-    let config_str = fs::read_to_string(&config_path)
-        .map_err(|e| format!("Failed to read {:?}: {}", config_path, e))?;
-
-    let config: Config = toml::from_str(&config_str)?;
-
-    let client = Client::builder()
-        .user_agent("rust-price-fetcher/1.0")
-        .build()?;
-
-    let mut results = Vec::new();
-
-    for asset in config.assets {
-        let price = match client.get(&asset.url).send() {
-            Ok(response) => match response.error_for_status() {
-                Ok(resp) => match resp.json::<Value>() {
-                    Ok(json) => {
-                        if let Some(price_value) = get_value_by_path(&json, &asset.price_path) {
-                            match price_value {
-                                Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
-                                Value::String(s) => s.parse().unwrap_or(f64::NAN),
-                                _ => f64::NAN,
-                            }
-                        } else {
-                            f64::NAN
-                        }
-                    }
-                    Err(_) => f64::NAN,
-                },
-                Err(_) => f64::NAN,
-            },
-            Err(_) => f64::NAN,
-        };
-
-        results.push((asset.name, price, asset.unit));
-    }
-
-    Ok(results)
-}
-
-fn current_timestamp() -> String {
-    Local::now().format("%H:%M:%S").to_string()
-}
-
-fn format_price(price: f64) -> String {
-    if price.is_nan() {
-        return "?".to_string();
-    }
-
-    let formatted = format!("{:.2}", price);
-    let parts: Vec<&str> = formatted.split('.').collect();
-
-    if parts.len() == 2 {
-        let integer_part = parts[0];
-        let decimal_part = parts[1];
-
-        // Add thousands separator to integer part
-        let mut result = String::new();
-        for (i, ch) in integer_part.chars().rev().enumerate() {
-            if i > 0 && i % 3 == 0 {
-                result.insert(0, '.');
-            }
-            result.insert(0, ch);
-        }
-
-        format!("{},{}", result, decimal_part)
-    } else {
-        formatted
-    }
-}
-
-fn build_menu(prices: &[(String, f64, String)], timestamp: &str) -> Menu {
-    let menu = Menu::new();
-
-    // Prices with emoji symbols
-    for (name, price, unit) in prices {
-        let symbol = match name.as_str() {
-            "Bitcoin" => "₿",
-            "Gold" => "🟡",
-            "TTF Gas" => "🔥",
-            _ => "•",
-        };
-
-        let formatted_price = format_price(*price);
-
-        // Format: Symbol Name — Price Unit
-        let row = format!("{} {} — {} {}", symbol, name, formatted_price, unit);
-
-        let item_id = name.to_lowercase().replace(" ", "_");
-        let item = MenuItem::with_id(&item_id, &row, true, None);
-        let _ = menu.append(&item);
-    }
-
-    let _ = menu.append(&PredefinedMenuItem::separator());
-
-    // Combined "Poll again" + timestamp
-    let poll_label = format!("🔄  Poll again ({})", timestamp);
-    let poll_item = MenuItem::with_id("poll", &poll_label, true, None);
-    let _ = menu.append(&poll_item);
-
-    let _ = menu.append(&PredefinedMenuItem::separator());
-
-    // Quit
-    let quit_item = MenuItem::with_id("quit", " Quit", true, None);
-    let _ = menu.append(&quit_item);
-
-    menu
-}
 
 struct App {
     tray: Arc<Mutex<TrayIcon>>,
@@ -195,37 +34,38 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Fetch once after the tray/menu has been created
         if !self.startup_fetch_done {
             self.startup_fetch_done = true;
 
             eprintln!("💰 Fetching initial prices...");
-            match fetch_prices() {
-                Ok(prices) => {
-                    eprintln!("✓ Got {} prices", prices.len());
-                    let timestamp = current_timestamp();
-                    let new_menu = build_menu(&prices, &timestamp);
-
-                    if let Ok(tray) = self.tray.lock() {
-                        tray.set_menu(Some(Box::new(new_menu)));
-                    }
-                }
-                Err(e) => eprintln!("✗ Failed to fetch prices: {}", e),
-            }
-        }
-
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            match event.id.0.as_str() {
-                "quit" => {
-                    event_loop.exit();
-                }
-                "poll" => {
-                    if let Ok(prices) = fetch_prices() {
+            if let Ok(config) = load_config() {
+                match fetch_prices(&config.assets) {
+                    Ok(prices) => {
+                        eprintln!("✓ Got {} prices", prices.len());
                         let timestamp = current_timestamp();
                         let new_menu = build_menu(&prices, &timestamp);
 
                         if let Ok(tray) = self.tray.lock() {
                             tray.set_menu(Some(Box::new(new_menu)));
+                        }
+                    }
+                    Err(e) => eprintln!("✗ Failed to fetch prices: {}", e),
+                }
+            }
+        }
+
+        while let Ok(event) = MenuEvent::receiver().try_recv() {
+            match event.id.0.as_str() {
+                "quit" => event_loop.exit(),
+                "poll" => {
+                    if let Ok(config) = load_config() {
+                        if let Ok(prices) = fetch_prices(&config.assets) {
+                            let timestamp = current_timestamp();
+                            let new_menu = build_menu(&prices, &timestamp);
+
+                            if let Ok(tray) = self.tray.lock() {
+                                tray.set_menu(Some(Box::new(new_menu)));
+                            }
                         }
                     }
                 }
@@ -241,7 +81,6 @@ impl ApplicationHandler for App {
 
 pub fn run_menubar() -> Result<(), Box<dyn Error>> {
     eprintln!("🎯 Ticker app started");
-    eprintln!("🚀 Ticker app starting...");
     eprintln!("🔧 Initializing menubar...");
 
     let mut links = HashMap::new();
@@ -255,8 +94,6 @@ pub fn run_menubar() -> Result<(), Box<dyn Error>> {
         "https://tradingeconomics.com/commodity/eu-natural-gas".to_string(),
     );
 
-    // Create initial menu with "Loading..."
-    eprintln!("🎯 Creating tray icon with loading state...");
     let initial_menu = Menu::new();
     let _ = initial_menu.append(&MenuItem::new("⏳ Loading prices...", false, None));
     let _ = initial_menu.append(&PredefinedMenuItem::separator());
@@ -267,11 +104,10 @@ pub fn run_menubar() -> Result<(), Box<dyn Error>> {
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(initial_menu))
         .with_tooltip("Price Ticker")
-        .with_title("ticker")
+        .with_title("Ticker")
         .build()?;
 
     let tray = Arc::new(Mutex::new(tray_icon));
-    eprintln!("✓ Tray icon created, fetching prices in background...");
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
