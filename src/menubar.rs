@@ -7,6 +7,7 @@ use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
+use webbrowser;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -20,15 +21,17 @@ use crate::price_fetcher::PriceFetcher;
 
 struct App {
     tray: Rc<RefCell<TrayIcon>>,
-    fetcher: PriceFetcher,
-    poller: Poller,
-    config: crate::config::Config,
+    fetcher: Option<PriceFetcher>,
+    poller: Option<Poller>,
+    config: Option<crate::config::Config>,
     links: HashMap<String, String>,
-    prices: Vec<(String, f64, String)>,  // name, price, unit
-    price_history: HashMap<String, f64>, // previous price per asset
+    prices: Vec<(String, f64, String)>,
+    price_history: HashMap<String, f64>,
     next_check: SystemTime,
     normal_icon: Icon,
     alert_icon: Icon,
+    config_loaded: bool,
+    config_error: Option<String>,
 }
 
 impl ApplicationHandler for App {
@@ -43,14 +46,42 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Load config once on first run
+        if !self.config_loaded {
+            eprintln!("📂 Loading config...");
+            match load_config() {
+                Ok(config) => {
+                    eprintln!("✓ Config loaded successfully");
+                    self.config = Some(config.clone());
+                    self.poller = Some(Poller::new(&config.assets));
+                    self.config_error = None;
+
+                    // Fetch prices immediately after config loads
+                    if let Some(fetcher) = &self.fetcher {
+                        eprintln!("💰 Fetching initial prices...");
+                        self.poll_due_assets(true);
+                        self.update_next_check();
+                    }
+                }
+                Err(e) => {
+                    eprintln!("✗ Failed to load config: {}", e);
+                    self.config_error = Some(format!("Config error: {}", e));
+                    self.update_error_menu();
+                }
+            }
+            self.config_loaded = true;
+        }
+
         // Handle menu events
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             match event.id.0.as_str() {
                 "quit" => event_loop.exit(),
                 "poll" => {
                     eprintln!("🔄 Manual poll triggered");
-                    self.poll_due_assets(true); // force all assets
-                    self.update_next_check();
+                    if self.config.is_some() {
+                        self.poll_due_assets(true);
+                        self.update_next_check();
+                    }
                 }
                 id => {
                     if let Some(url) = self.links.get(id) {
@@ -60,10 +91,10 @@ impl ApplicationHandler for App {
             }
         }
 
-        // Auto‑poll when due
-        if SystemTime::now() >= self.next_check {
+        // Auto-poll when due
+        if self.config.is_some() && SystemTime::now() >= self.next_check {
             eprintln!("⏰ Auto-poll triggered");
-            self.poll_due_assets(false); // only due assets
+            self.poll_due_assets(false);
             self.update_next_check();
         }
 
@@ -78,23 +109,25 @@ impl ApplicationHandler for App {
 }
 
 impl App {
-    /// Poll assets, optionally forcing all to update (`force = true` for "Poll now")
     fn poll_due_assets(&mut self, force: bool) {
-        let new_prices = self.fetcher.fetch_all(&self.config.assets);
+        let Some(config) = &self.config else { return };
+        let Some(fetcher) = &self.fetcher else { return };
+        let Some(poller) = &mut self.poller else {
+            return;
+        };
 
+        let new_prices = fetcher.fetch_all(&config.assets);
         eprintln!("🔍 Checking {} assets for updates...", new_prices.len());
 
         let mut updated_count = 0;
         let mut updates: Vec<(String, f64)> = Vec::new();
 
         for (new_name, new_price, new_unit) in &new_prices {
-            // Skip if not due AND not forced
-            if !force && !self.poller.should_poll(new_name) {
+            if !force && !poller.should_poll(new_name) {
                 eprintln!("  ⏭️  {} (not due yet)", new_name);
                 continue;
             }
 
-            // OLD price (from previous poll)
             let old_price = self.price_history.get(new_name).copied();
 
             let price_str = if new_price.is_nan() {
@@ -115,7 +148,6 @@ impl App {
                 "".to_string()
             };
 
-            // Update current prices list
             if let Some(pos) = self.prices.iter().position(|(name, _, _)| name == new_name) {
                 self.prices[pos] = (new_name.clone(), *new_price, new_unit.clone());
             } else {
@@ -123,36 +155,34 @@ impl App {
                     .push((new_name.clone(), *new_price, new_unit.clone()));
             }
 
-            // Update poll schedule for this asset
-            self.poller.mark_polled(new_name, &self.config.assets);
+            poller.mark_polled(new_name, &config.assets);
             eprintln!(
                 "  ✓ {} → {} {}{}",
                 new_name, price_str, new_unit, change_note
             );
             updated_count += 1;
 
-            // Store update for history (applied AFTER menu update)
             updates.push((new_name.clone(), *new_price));
         }
 
         eprintln!("📊 Update complete: {} updated", updated_count);
 
-        // Build menu using OLD prices from history
         self.update_menu();
 
-        // Now update history for next comparison
         for (name, price) in updates {
             self.price_history.insert(name, price);
         }
     }
 
-    /// Decide when to check next (smallest time_until_poll over all assets)
     fn update_next_check(&mut self) {
+        let Some(config) = &self.config else { return };
+        let Some(poller) = &self.poller else { return };
+
         let mut earliest = SystemTime::now() + std::time::Duration::from_secs(3600);
         let mut earliest_asset = "unknown".to_string();
 
-        for asset in &self.config.assets {
-            if let Some(duration) = self.poller.time_until_poll(&asset.name) {
+        for asset in &config.assets {
+            if let Some(duration) = poller.time_until_poll(&asset.name) {
                 let next = SystemTime::now() + duration;
                 if next < earliest {
                     earliest = next;
@@ -170,7 +200,6 @@ impl App {
         eprintln!("⏱️  Next check: {}s ({})", secs, earliest_asset);
     }
 
-    /// Check if any asset has changed price (for alert icon)
     fn has_changes(&self) -> bool {
         for (name, price, _unit) in &self.prices {
             if let Some(prev) = self.price_history.get(name)
@@ -186,16 +215,16 @@ impl App {
         false
     }
 
-    /// Build menu and update tray icon/title
     fn update_menu(&self) {
-        // Enrich prices with previous price and symbol from config
+        let Some(config) = &self.config else { return };
+        let Some(poller) = &self.poller else { return };
+
         let prices_with_history: Vec<(String, f64, String, Option<f64>, String)> = self
             .prices
             .iter()
             .map(|(name, price, unit)| {
                 let prev = self.price_history.get(name).copied();
-                let symbol = self
-                    .config
+                let symbol = config
                     .assets
                     .iter()
                     .find(|a| a.name == *name)
@@ -206,26 +235,47 @@ impl App {
             })
             .collect();
 
-        let menu = MenuBuilder::build(&prices_with_history, &self.poller);
+        let menu = MenuBuilder::build(&prices_with_history, poller);
 
-        if let Ok(tray) = self.tray.try_borrow_mut() {
-            tray.set_menu(Some(Box::new(menu)));
+        match self.tray.try_borrow_mut() {
+            Ok(mut tray) => {
+                tray.set_menu(Some(Box::new(menu)));
 
-            // Icon: alert if changes detected, otherwise normal
-            let icon = if self.has_changes() {
-                self.alert_icon.clone()
-            } else {
-                self.normal_icon.clone()
-            };
-            let _ = tray.set_icon(Some(icon));
+                let icon = if self.has_changes() {
+                    self.alert_icon.clone()
+                } else {
+                    self.normal_icon.clone()
+                };
+                let _ = tray.set_icon(Some(icon));
+                tray.set_title(Some("Ticker"));
+            }
+            Err(_) => {}
+        }
+    }
 
-            // Optional: update title (you can keep "Ticker" if you prefer)
-            tray.set_title(Some("Ticker"));
+    fn update_error_menu(&self) {
+        let menu = Menu::new();
+
+        if let Some(error) = &self.config_error {
+            let _ = menu.append(&MenuItem::new(&format!("❌ {}", error), false, None));
+        } else {
+            let _ = menu.append(&MenuItem::new("⏳ Loading config...", false, None));
+        }
+
+        let _ = menu.append(&PredefinedMenuItem::separator());
+        let _ = menu.append(&MenuItem::with_id("poll", "🔄  Retry", true, None));
+        let _ = menu.append(&PredefinedMenuItem::separator());
+        let _ = menu.append(&MenuItem::with_id("quit", " Quit", true, None));
+
+        match self.tray.try_borrow_mut() {
+            Ok(tray) => {
+                tray.set_menu(Some(Box::new(menu)));
+            }
+            Err(_) => {}
         }
     }
 }
 
-/// Load a PNG icon and convert to `tray_icon::Icon`
 fn load_icon(path: &str) -> Result<Icon, Box<dyn std::error::Error>> {
     let image = ImageReader::open(path)?.decode()?.to_rgba8();
     let (width, height) = image.dimensions();
@@ -236,16 +286,12 @@ fn load_icon(path: &str) -> Result<Icon, Box<dyn std::error::Error>> {
 pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("🎯 Ticker app started");
 
-    let config = load_config()?;
     let fetcher = PriceFetcher::new()?;
-    let poller = Poller::new(&config.assets);
 
-    // Load icons (32×32 PNG recommended)
     eprintln!("📁 Loading icons...");
     let normal_icon = load_icon("assets/normal.png")?;
     let alert_icon = load_icon("assets/update.png")?;
 
-    // Links for click‑through on menu items
     let mut links = HashMap::new();
     links.insert("bitcoin".to_string(), "https://bitcoin.nl".to_string());
     links.insert("gold".to_string(), "https://xaus.com".to_string());
@@ -256,9 +302,9 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initial menu: loading state
     let initial_menu = Menu::new();
-    let _ = initial_menu.append(&MenuItem::new("⏳ Loading prices...", false, None));
+    let _ = initial_menu.append(&MenuItem::new("⏳ Loading config...", false, None));
     let _ = initial_menu.append(&PredefinedMenuItem::separator());
-    let _ = initial_menu.append(&MenuItem::with_id("poll", "🔄  Poll now", true, None));
+    let _ = initial_menu.append(&MenuItem::with_id("poll", "🔄  Retry", true, None));
     let _ = initial_menu.append(&PredefinedMenuItem::separator());
     let _ = initial_menu.append(&MenuItem::with_id("quit", " Quit", true, None));
 
@@ -275,20 +321,18 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app = App {
         tray,
-        fetcher,
-        poller,
-        config,
+        fetcher: Some(fetcher),
+        poller: None,
+        config: None,
         links,
         prices: Vec::new(),
         price_history: HashMap::new(),
         next_check: SystemTime::now(),
         normal_icon,
         alert_icon,
+        config_loaded: false,
+        config_error: None,
     };
-
-    // Initial forced poll (all assets)
-    app.poll_due_assets(true);
-    app.update_next_check();
 
     event_loop.run_app(&mut app)?;
     Ok(())
