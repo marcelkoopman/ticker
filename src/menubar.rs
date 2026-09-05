@@ -1,14 +1,14 @@
 use image::ImageReader;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::SystemTime;
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
-use webbrowser;
+use webbrowser; // Used in match statement
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -81,29 +81,24 @@ impl ApplicationHandler for App {
         // ===== FASE 2: Normale polling en menu-updates =====
 
         // Handle menu events
-        while let Ok(_event) = MenuEvent::receiver().try_recv() {
-            // NOTE: tray_icon crate provides the event; use a loop that consumes it correctly.
-            // If your compiler warns here, replace this with the exact matching pattern you had before.
-            if let Ok(event) = MenuEvent::receiver().try_recv() {
-                match event.id.0.as_str() {
-                    "quit" => event_loop.exit(),
-                    "poll" => {
-                        eprintln!("🔄 Manual poll triggered");
-                        if self.config.is_some() {
-                            self.poll_due_assets(true);
-                            self.update_next_check();
-                        } else {
-                            eprintln!("⚠️  Cannot poll: config not loaded");
-                        }
+        while let Ok(event) = MenuEvent::receiver().try_recv() {
+            match event.id.0.as_str() {
+                "quit" => event_loop.exit(),
+                "poll" => {
+                    eprintln!("🔄 Manual poll triggered");
+                    if self.config.is_some() {
+                        self.poll_due_assets(true);
+                        self.update_next_check();
+                    } else {
+                        eprintln!("⚠️  Cannot poll: config not loaded");
                     }
-                    id => {
-                        if let Some(url) = self.links.get(id) {
-                            let _ = webbrowser::open(url);
-                        }
+                }
+                id => {
+                    if let Some(url) = self.links.get(id) {
+                        let _ = webbrowser::open(url);
                     }
                 }
             }
-            break;
         }
 
         // Auto-poll when due
@@ -263,7 +258,7 @@ impl App {
         let menu = Menu::new();
 
         if let Some(error) = &self.config_error {
-            let _ = menu.append(&MenuItem::new(&format!("❌ {}", error), false, None));
+            let _ = menu.append(&MenuItem::new(format!("❌ {}", error).as_str(), false, None));
         } else {
             let _ = menu.append(&MenuItem::new("⏳ Loading config...", false, None));
         }
@@ -282,17 +277,17 @@ impl App {
 fn bundle_assets_dir() -> PathBuf {
     // If running from a macOS .app bundle, we want:
     //   MyApp.app/Contents/Resources/assets
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(app_dir) = exe_path.ancestors().find(|p| {
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(app_dir) = exe_path.ancestors().find(|p| {
             p.file_name()
                 .and_then(|name| name.to_str())
                 .map(|name| name.ends_with(".app"))
                 .unwrap_or(false)
-        }) {
-            let assets = app_dir.join("Contents/Resources/assets");
-            if assets.exists() {
-                return assets;
-            }
+        })
+    {
+        let assets = app_dir.join("Contents/Resources/assets");
+        if assets.exists() {
+            return assets;
         }
     }
 
