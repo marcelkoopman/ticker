@@ -7,7 +7,6 @@ use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
-use webbrowser;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -102,13 +101,12 @@ impl ApplicationHandler for App {
         }
 
         // Auto-poll when due
-        if let Some(_) = &self.config {
-            if SystemTime::now() >= self.next_check {
+        if self.config.is_some()
+            && SystemTime::now() >= self.next_check {
                 eprintln!("⏰ Auto-poll triggered");
                 self.poll_due_assets(false);
                 self.update_next_check();
             }
-        }
 
         // Sleep until next_check
         if let Ok(duration) = self.next_check.duration_since(SystemTime::now()) {
@@ -249,19 +247,16 @@ impl App {
 
         let menu = MenuBuilder::build(&prices_with_history, poller);
 
-        match self.tray.try_borrow_mut() {
-            Ok(tray) => {
-                tray.set_menu(Some(Box::new(menu)));
+        if let Ok(tray) = self.tray.try_borrow_mut() {
+            tray.set_menu(Some(Box::new(menu)));
 
-                let icon = if self.has_changes() {
-                    self.alert_icon.clone()
-                } else {
-                    self.normal_icon.clone()
-                };
-                let _ = tray.set_icon(Some(icon));
-                tray.set_title(Some("Ticker"));
-            }
-            Err(_) => {}
+            let icon = if self.has_changes() {
+                self.alert_icon.clone()
+            } else {
+                self.normal_icon.clone()
+            };
+            let _ = tray.set_icon(Some(icon));
+            tray.set_title(Some("Ticker"));
         }
     }
 
@@ -269,7 +264,7 @@ impl App {
         let menu = Menu::new();
 
         if let Some(error) = &self.config_error {
-            let _ = menu.append(&MenuItem::new(&format!("❌ {}", error), false, None));
+            let _ = menu.append(&MenuItem::new(format!("❌ {}", error), false, None));
         } else {
             let _ = menu.append(&MenuItem::new("⏳ Loading config...", false, None));
         }
@@ -279,11 +274,8 @@ impl App {
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&MenuItem::with_id("quit", "Quit", true, None));
 
-        match self.tray.try_borrow_mut() {
-            Ok(tray) => {
-                tray.set_menu(Some(Box::new(menu)));
-            }
-            Err(_) => {}
+        if let Ok(tray) = self.tray.try_borrow_mut() {
+            tray.set_menu(Some(Box::new(menu)));
         }
     }
 }
