@@ -1,9 +1,9 @@
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
-use chrono::Local;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PinnedPrice {

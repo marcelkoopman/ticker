@@ -23,8 +23,8 @@ pub fn load_config() -> Result<Config, Box<dyn Error>> {
     let path = config_path()?;
     eprintln!("📂 Reading config from: {:?}", path);
 
-    let config_str = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
+    let config_str =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
 
     toml::from_str(&config_str).map_err(|e| e.into())
 }

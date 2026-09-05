@@ -1,9 +1,9 @@
-mod menubar;
 mod config;
-mod price_fetcher;
 mod formatter;
 mod menu_builder;
+mod menubar;
 mod models;
+mod price_fetcher;
 mod price_tracker;
 
 fn main() {

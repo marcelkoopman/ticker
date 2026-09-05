@@ -3,11 +3,7 @@ use crate::models::Price;
 use crate::price_tracker;
 use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
 
-pub fn build_menu_with_next_poll(
-    prices: &[Price],
-    next_poll_str: &str,
-    last_update: &str,
-) -> Menu {
+pub fn build_menu_with_next_poll(prices: &[Price], next_poll_str: &str, last_update: &str) -> Menu {
     let menu = Menu::new();
 
     let pinned_prices = price_tracker::load_pinned_prices().unwrap_or_default();
@@ -16,8 +12,8 @@ pub fn build_menu_with_next_poll(
         let symbol = get_symbol(&price.name);
         let formatted = format_price(price.value);
 
-        let change_indicator = price_tracker::get_price_change(&price.name, price.value)
-            .unwrap_or_default();
+        let change_indicator =
+            price_tracker::get_price_change(&price.name, price.value).unwrap_or_default();
 
         let is_pinned = pinned_prices.contains_key(&price.name);
 

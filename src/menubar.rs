@@ -7,12 +7,12 @@ use crate::price_tracker;
 use chrono::{Duration as ChronoDuration, Local};
 use std::collections::HashMap;
 use std::error::Error;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     TrayIcon, TrayIconBuilder,
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 use webbrowser;
 use winit::{
@@ -43,9 +43,9 @@ fn format_next_poll_time(seconds_until: u64) -> String {
     next_time.format("%H:%M:%S").to_string()
 }
 
-fn market_indicator(prices: &[Price]) -> String {
-    let mut up_count = 0;
-    let mut down_count = 0;
+fn market_indicator_with_counts(prices: &[Price]) -> (String, u32, u32) {
+    let mut up_count = 0u32;
+    let mut down_count = 0u32;
 
     for price in prices {
         if let Some(change) = price_tracker::get_price_change(&price.name, price.value) {
@@ -57,13 +57,17 @@ fn market_indicator(prices: &[Price]) -> String {
         }
     }
 
-    if up_count > down_count {
-        "▲".to_string()
+    let total = prices.len() as u32;
+
+    let indicator = if up_count > down_count {
+        format!("▲ {}/{}", up_count, total)
     } else if down_count > up_count {
-        "▼".to_string()
+        format!("▼ {}/{}", down_count, total)
     } else {
-        "→".to_string()
-    }
+        format!("→ {}/{}", up_count, total)
+    };
+
+    (indicator, up_count, down_count)
 }
 
 fn spawn_price_fetcher(tx: mpsc::Sender<Vec<Price>>) {
@@ -78,7 +82,8 @@ fn spawn_price_fetcher(tx: mpsc::Sender<Vec<Price>>) {
 
 impl App {
     fn refresh_tray(&self) {
-        let title = format!("Ticker {}", market_indicator(&self.prices));
+        let (indicator, _up, _down) = market_indicator_with_counts(&self.prices);
+        let title = format!("Ticker {}", indicator);
         let menu = build_menu_with_next_poll(
             &self.prices,
             &self.next_poll_time_str,
@@ -162,9 +167,11 @@ impl ApplicationHandler for App {
 
                     let price_name_raw = id.strip_prefix("pin_").unwrap_or("");
 
-                    if let Some(price) = self.prices.iter().find(|p| {
-                        p.name.to_lowercase().replace(' ', "_") == price_name_raw
-                    }) {
+                    if let Some(price) = self
+                        .prices
+                        .iter()
+                        .find(|p| p.name.to_lowercase().replace(' ', "_") == price_name_raw)
+                    {
                         let price_name = price.name.clone();
                         let price_value = price.value;
 
