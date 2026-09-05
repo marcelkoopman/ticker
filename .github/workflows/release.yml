@@ -32,8 +32,7 @@ jobs:
         run: cargo build --release --target aarch64-apple-darwin
 
       - name: Create app bundle
-        run: |
-          cargo bundle --release --target aarch64-apple-darwin
+        run: cargo bundle --release --target aarch64-apple-darwin
 
       - name: Verify app bundle integrity
         run: |
@@ -47,10 +46,15 @@ jobs:
           codesign --force --deep --sign - target/aarch64-apple-darwin/release/bundle/osx/Ticker.app
           codesign -v target/aarch64-apple-darwin/release/bundle/osx/Ticker.app
 
-      - name: Create DMG
+      - name: Create DMG with Applications link
         run: |
           mkdir -p dmg_temp
           cp -r target/aarch64-apple-darwin/release/bundle/osx/Ticker.app dmg_temp/
+
+          # Create symlink to Applications folder
+          ln -s /Applications dmg_temp/Applications
+
+          # Create DMG
           hdiutil create -volname "Ticker" -srcfolder dmg_temp -ov -format UDZO target/aarch64-apple-darwin/release/bundle/dmg/Ticker.dmg
           rm -rf dmg_temp
 
@@ -75,4 +79,4 @@ jobs:
 
       - name: Release summary
         if: success()
-        run: echo "✅ Release created successfully!"
+        run: echo "✅ Release created successfully with Applications link!"
