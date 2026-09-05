@@ -23,11 +23,10 @@ impl PriceFetcher {
                     Ok(json) => {
                         eprintln!(
                             "📦 Raw JSON (first 500 chars): {}",
-                            serde_json::to_string(&json).unwrap_or_default()[..std::cmp::min(
+                            &serde_json::to_string(&json).unwrap_or_default()[..std::cmp::min(
                                 500,
                                 serde_json::to_string(&json).unwrap_or_default().len()
                             )]
-                                .to_string()
                         );
 
                         if let Some(price_value) = self.get_value_by_path(&json, &asset.price_path)
@@ -95,13 +94,10 @@ impl PriceFetcher {
                     current = arr
                         .iter()
                         .find(|item| {
-                            if let Value::Object(map) = item {
-                                if let Some(field) = map.get(field_name) {
-                                    return field
-                                        .as_str()
-                                        .map(|s| s == filter_value)
-                                        .unwrap_or(false);
-                                }
+                            if let Value::Object(map) = item
+                                && let Some(field) = map.get(field_name)
+                            {
+                                return field.as_str().map(|s| s == filter_value).unwrap_or(false);
                             }
                             false
                         })?
