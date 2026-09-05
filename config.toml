@@ -7,6 +7,14 @@ poll_interval = "1m"
 symbol = "💰"
 
 [[assets]]
+name = "ETH"
+url = "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=eur"
+price_path = "ethereum.eur"
+unit = "EUR"
+poll_interval = "1m"
+symbol = "Ξ"
+
+[[assets]]
 name = "Gold"
 url = "https://xaus.com/api/v1/spot?currency=EUR"
 price_path = "xau.price"
@@ -21,3 +29,19 @@ price_path = "ttf.priceEurMwh"
 unit = "EUR"
 poll_interval = "24h"
 symbol = "🔥"
+
+[[assets]]
+name = "Benzine"
+url = "https://eurooilwatch.com/api/v1/prices"
+price_path = "countries.countryCode=NL.petrolPrice"
+unit = "EUR"
+poll_interval = "24h"
+symbol = "⛽"
+
+[[assets]]
+name = "Diesel"
+url = "https://eurooilwatch.com/api/v1/prices"
+price_path = "countries.countryCode=NL.dieselPrice"
+unit = "EUR"
+poll_interval = "24h"
+symbol = "🛢️"
