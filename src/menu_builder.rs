@@ -55,6 +55,12 @@ pub fn build_menu_with_next_poll(prices: &[Price], next_poll_str: &str, last_upd
 
     let _ = menu.append(&PredefinedMenuItem::separator());
 
+    let version_label = format!("ℹ Version v{}", env!("CARGO_PKG_VERSION"));
+    let version_item = MenuItem::new(&version_label, false, None);
+    let _ = menu.append(&version_item);
+
+    let _ = menu.append(&PredefinedMenuItem::separator());
+
     let quit_item = MenuItem::with_id("quit", " Quit", true, None);
     let _ = menu.append(&quit_item);
 

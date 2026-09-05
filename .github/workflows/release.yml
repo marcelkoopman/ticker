@@ -39,15 +39,19 @@ jobs:
           echo "=== DMG integrity check ==="
           hdiutil verify target/release/bundle/dmg/Ticker.dmg || echo "⚠️ DMG warning (but continuing)"
 
+      - name: Rename DMG with version
+        run: |
+          VERSION=${{ github.ref_name }}
+          mv target/release/bundle/dmg/Ticker.dmg target/release/bundle/dmg/Ticker-${VERSION}.dmg
+          ls -lah target/release/bundle/dmg/
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/bundle/dmg/Ticker.dmg
-          draft: false
-          prerelease: false
+          files: target/release/bundle/dmg/Ticker-*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Release summary
         if: success()
-        run: echo "✅ Release created successfully!"
+        run: echo "✅ Release created successfully with version tag!"
