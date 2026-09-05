@@ -2,7 +2,7 @@ use crate::config::load_config;
 use crate::menu_builder::build_menu_with_next_poll;
 use crate::models::Price;
 use crate::price_fetcher::fetch_prices;
-use crate::price_tracker;
+use crate::price_history;
 
 use chrono::{Duration as ChronoDuration, Local};
 use std::cell::RefCell;
@@ -22,17 +22,25 @@ use winit::{
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
 };
 
+struct AssetPoller {
+    last_poll: Instant,
+    #[allow(dead_code)]
+    poll_interval_seconds: u64,
+}
+
 struct App {
     tray: Rc<RefCell<TrayIcon>>,
     links: HashMap<String, String>,
     startup_fetch_done: bool,
     fetch_in_progress: bool,
-    last_poll_time: Instant,
     prices: Vec<Price>,
+    asset_pollers: HashMap<String, AssetPoller>,
     next_poll_time_str: String,
     last_update_timestamp: String,
     tx: mpsc::Sender<Vec<Price>>,
     rx: mpsc::Receiver<Vec<Price>>,
+    asset_names: Vec<String>,
+    poll_intervals: HashMap<String, u64>,
 }
 
 fn current_timestamp() -> String {
@@ -44,34 +52,7 @@ fn format_next_poll_time(seconds_until: u64) -> String {
     next_time.format("%H:%M:%S").to_string()
 }
 
-fn market_indicator_with_counts(prices: &[Price]) -> (String, u32, u32) {
-    let mut up_count = 0u32;
-    let mut down_count = 0u32;
-
-    for price in prices {
-        if let Some(change) = price_tracker::get_price_change(&price.name, price.value) {
-            if change.contains("🟢") {
-                up_count += 1;
-            } else if change.contains("🔴") {
-                down_count += 1;
-            }
-        }
-    }
-
-    let total = prices.len() as u32;
-
-    let indicator = if up_count > down_count {
-        format!("▲ {}/{}", up_count, total)
-    } else if down_count > up_count {
-        format!("▼ {}/{}", down_count, total)
-    } else {
-        format!("→ {}/{}", up_count, total)
-    };
-
-    (indicator, up_count, down_count)
-}
-
-fn spawn_price_fetcher(tx: mpsc::Sender<Vec<Price>>) {
+fn spawn_price_fetcher(tx: mpsc::Sender<Vec<Price>>, _asset_names: Vec<String>) {
     thread::spawn(move || {
         if let Ok(config) = load_config()
             && let Ok(prices) = fetch_prices(&config.assets)
@@ -83,8 +64,7 @@ fn spawn_price_fetcher(tx: mpsc::Sender<Vec<Price>>) {
 
 impl App {
     fn refresh_tray(&self) {
-        let (indicator, _up, _down) = market_indicator_with_counts(&self.prices);
-        let title = format!("Ticker {}", indicator);
+        let title = "Ticker".to_string();
         let menu = build_menu_with_next_poll(
             &self.prices,
             &self.next_poll_time_str,
@@ -99,8 +79,58 @@ impl App {
     fn start_background_fetch(&mut self) {
         if !self.fetch_in_progress {
             self.fetch_in_progress = true;
-            spawn_price_fetcher(self.tx.clone());
+            spawn_price_fetcher(self.tx.clone(), self.asset_names.clone());
         }
+    }
+
+    fn should_poll_any_asset(&self) -> bool {
+        for asset_name in &self.asset_names {
+            if let Some(poller) = self.asset_pollers.get(asset_name)
+                && let Some(interval) = self.poll_intervals.get(asset_name)
+                && poller.last_poll.elapsed() >= Duration::from_secs(*interval)
+            {
+                return true;
+            }
+            if !self.asset_pollers.contains_key(asset_name) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn update_asset_poll_times(&mut self) {
+        for asset_name in &self.asset_names {
+            if let Some(interval) = self.poll_intervals.get(asset_name) {
+                self.asset_pollers.insert(
+                    asset_name.clone(),
+                    AssetPoller {
+                        last_poll: Instant::now(),
+                        poll_interval_seconds: *interval,
+                    },
+                );
+            }
+        }
+    }
+
+    fn calculate_next_poll_time(&self) -> String {
+        let mut min_seconds = u64::MAX;
+
+        for asset_name in &self.asset_names {
+            if let Some(poller) = self.asset_pollers.get(asset_name)
+                && let Some(interval) = self.poll_intervals.get(asset_name)
+            {
+                let elapsed = poller.last_poll.elapsed().as_secs();
+                let remaining = interval.saturating_sub(elapsed);
+                if remaining < min_seconds {
+                    min_seconds = remaining;
+                }
+            }
+        }
+
+        if min_seconds == u64::MAX {
+            return "calculating...".to_string();
+        }
+        format_next_poll_time(min_seconds)
     }
 }
 
@@ -124,10 +154,15 @@ impl ApplicationHandler for App {
                 match fetch_prices(&config.assets) {
                     Ok(prices) => {
                         eprintln!("✓ Got {} prices", prices.len());
-                        self.prices = prices;
-                        self.last_poll_time = Instant::now();
+                        self.prices = prices.clone();
+
+                        for price in &prices {
+                            let _ = price_history::update_price_history(&price.name, price.value);
+                        }
+
+                        self.update_asset_poll_times();
                         self.last_update_timestamp = current_timestamp();
-                        self.next_poll_time_str = format_next_poll_time(30);
+                        self.next_poll_time_str = self.calculate_next_poll_time();
                         self.fetch_in_progress = false;
                         self.refresh_tray();
                     }
@@ -136,59 +171,38 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            return;
         }
 
         if let Ok(new_prices) = self.rx.try_recv() {
             eprintln!("✓ Got prices from background thread");
-            self.prices = new_prices;
+            self.prices = new_prices.clone();
+
+            for price in &self.prices {
+                let _ = price_history::update_price_history(&price.name, price.value);
+            }
+
             self.fetch_in_progress = false;
-            self.last_poll_time = Instant::now();
+            self.update_asset_poll_times();
             self.last_update_timestamp = current_timestamp();
-            self.next_poll_time_str = format_next_poll_time(30);
+            self.next_poll_time_str = self.calculate_next_poll_time();
             self.refresh_tray();
         }
 
-        if self.last_poll_time.elapsed() >= Duration::from_secs(30) && !self.fetch_in_progress {
-            eprintln!("⏱️ Auto-polling after 30 seconds");
+        if self.should_poll_any_asset() && !self.fetch_in_progress {
+            eprintln!("⏱️ Auto-polling triggered");
             self.start_background_fetch();
         }
 
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             match event.id.0.as_str() {
                 "quit" => {
+                    eprintln!("👋 Quitting...");
                     event_loop.exit();
                 }
                 "poll" => {
                     eprintln!("🔄 Manual poll triggered");
                     self.start_background_fetch();
-                }
-                id if id.starts_with("pin_") => {
-                    eprintln!("🔧 Pin event triggered: {}", id);
-
-                    let price_name_raw = id.strip_prefix("pin_").unwrap_or("");
-
-                    if let Some(price) = self
-                        .prices
-                        .iter()
-                        .find(|p| p.name.to_lowercase().replace(' ', "_") == price_name_raw)
-                    {
-                        let price_name = price.name.clone();
-                        let price_value = price.value;
-
-                        if let Ok(pinned) = price_tracker::load_pinned_prices() {
-                            if pinned.contains_key(&price_name) {
-                                let _ = price_tracker::remove_pinned_price(&price_name);
-                                eprintln!("📍 Unpinned: {}", price_name);
-                            } else {
-                                let _ = price_tracker::save_pinned_price(&price_name, price_value);
-                                eprintln!("📌 Pinned: {} @ {}", price_name, price_value);
-                            }
-                        }
-
-                        self.refresh_tray();
-                    } else {
-                        eprintln!("❌ Could not find price for: {}", price_name_raw);
-                    }
                 }
                 id => {
                     if let Some(url) = self.links.get(id) {
@@ -204,6 +218,8 @@ pub fn initialize_app() -> Result<(), Box<dyn Error>> {
     eprintln!("🚀 Ticker app starting...");
     eprintln!("🔧 Initializing menubar...");
 
+    let config = load_config()?;
+
     let mut links = HashMap::new();
     links.insert("bitcoin".to_string(), "https://bitcoin.nl".to_string());
     links.insert(
@@ -214,6 +230,14 @@ pub fn initialize_app() -> Result<(), Box<dyn Error>> {
         "ttf_gas".to_string(),
         "https://tradingeconomics.com/commodity/eu-natural-gas".to_string(),
     );
+
+    let mut asset_names = Vec::new();
+    let mut poll_intervals = HashMap::new();
+
+    for asset in &config.assets {
+        asset_names.push(asset.name.clone());
+        poll_intervals.insert(asset.name.clone(), asset.poll_interval_seconds());
+    }
 
     let initial_menu = Menu::new();
     let _ = initial_menu.append(&MenuItem::new("⏳ Loading prices...", false, None));
@@ -235,18 +259,19 @@ pub fn initialize_app() -> Result<(), Box<dyn Error>> {
 
     let (tx, rx) = mpsc::channel();
 
-    let now = Instant::now();
     let mut app = App {
         tray,
         links,
         startup_fetch_done: false,
         fetch_in_progress: false,
-        last_poll_time: now,
         prices: Vec::new(),
+        asset_pollers: HashMap::new(),
         next_poll_time_str: "loading...".to_string(),
         last_update_timestamp: "never".to_string(),
         tx,
         rx,
+        asset_names,
+        poll_intervals,
     };
 
     event_loop.run_app(&mut app)?;
