@@ -57,7 +57,7 @@ impl ApplicationHandler for App {
                     self.config_error = None;
 
                     // Fetch prices immediately after config loads
-                    if let Some(fetcher) = &self.fetcher {
+                    if let Some(_fetcher) = &self.fetcher {
                         eprintln!("💰 Fetching initial prices...");
                         self.poll_due_assets(true);
                         self.update_next_check();
@@ -238,7 +238,7 @@ impl App {
         let menu = MenuBuilder::build(&prices_with_history, poller);
 
         match self.tray.try_borrow_mut() {
-            Ok(mut tray) => {
+            Ok(tray) => {
                 tray.set_menu(Some(Box::new(menu)));
 
                 let icon = if self.has_changes() {
