@@ -10,12 +10,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
 jobs:
   build:
     name: Build DMG
     runs-on: macos-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -28,41 +28,40 @@ jobs:
       - name: Install cargo-bundle
         run: cargo install cargo-bundle
 
-      - name: Build release binary
-        run: cargo build --release --target aarch64-apple-darwin
-
-      - name: Create app bundle
+      - name: Build app bundle
         run: cargo bundle --release --target aarch64-apple-darwin
 
-      - name: Verify app bundle integrity
+      - name: Verify app bundle
         run: |
-          echo "=== Checking app bundle structure ==="
+          echo "=== App bundle ==="
           ls -la target/aarch64-apple-darwin/release/bundle/osx/Ticker.app/Contents/
-          test -f target/aarch64-apple-darwin/release/bundle/osx/Ticker.app/Contents/Info.plist || echo "❌ Missing Info.plist!"
-          test -f target/aarch64-apple-darwin/release/bundle/osx/Ticker.app/Contents/MacOS/ticker || echo "❌ Missing binary!"
+          file target/aarch64-apple-darwin/release/bundle/osx/Ticker.app/Contents/MacOS/ticker
 
       - name: Ad-hoc sign the app
         run: |
           codesign --force --deep --sign - target/aarch64-apple-darwin/release/bundle/osx/Ticker.app
           codesign -v target/aarch64-apple-darwin/release/bundle/osx/Ticker.app
 
-      - name: Create DMG with Applications link
+      - name: Create DMG with Applications link and app icon
         run: |
           mkdir -p dmg_temp
-          cp -r target/aarch64-apple-darwin/release/bundle/osx/Ticker.app dmg_temp/
-
-          # Create symlink to Applications folder
+          cp -R target/aarch64-apple-darwin/release/bundle/osx/Ticker.app dmg_temp/
           ln -s /Applications dmg_temp/Applications
 
-          # Create DMG
-          hdiutil create -volname "Ticker" -srcfolder dmg_temp -ov -format UDZO target/aarch64-apple-darwin/release/bundle/dmg/Ticker.dmg
+          hdiutil create \
+            -volname "Ticker" \
+            -srcfolder dmg_temp \
+            -ov \
+            -format UDZO \
+            -volicon target/aarch64-apple-darwin/release/bundle/osx/Ticker.app/Contents/Resources/icon.icns \
+            target/aarch64-apple-darwin/release/bundle/dmg/Ticker.dmg
+
           rm -rf dmg_temp
 
       - name: Verify DMG
         run: |
-          echo "=== DMG verification ==="
           file target/aarch64-apple-darwin/release/bundle/dmg/Ticker.dmg
-          hdiutil verify target/aarch64-apple-darwin/release/bundle/dmg/Ticker.dmg || echo "⚠️ DMG check passed with warnings"
+          hdiutil verify target/aarch64-apple-darwin/release/bundle/dmg/Ticker.dmg || true
 
       - name: Rename DMG with version
         run: |
@@ -76,7 +75,3 @@ jobs:
           files: target/aarch64-apple-darwin/release/bundle/dmg/Ticker-*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Release summary
-        if: success()
-        run: echo "✅ Release created successfully with Applications link!"
