@@ -4,17 +4,10 @@ use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
 pub struct MenuBuilder;
 
 impl MenuBuilder {
-    pub fn build(prices: &[(String, f64, String, Option<f64>)], poller: &Poller) -> Menu {
+    pub fn build(prices: &[(String, f64, String, Option<f64>, String)], poller: &Poller) -> Menu {
         let menu = Menu::new();
 
-        for (name, price, unit, prev_price) in prices {
-            let symbol = match name.as_str() {
-                "Bitcoin" => "₿",
-                "Gold" => "🟡",
-                "TTF Gas" => "🔥",
-                _ => "•",
-            };
-
+        for (name, price, unit, prev_price, symbol) in prices {
             let formatted_price = Self::format_price(*price);
 
             // Calculate price change indicator
@@ -25,12 +18,12 @@ impl MenuBuilder {
                     let diff = price - prev;
                     if diff > 0.01 {
                         let change_str = Self::format_price(diff);
-                        format!(" ↑ {}", change_str)
+                        format!(" 🟢 +{}", change_str) // Green circle
                     } else if diff < -0.01 {
                         let change_str = Self::format_price(diff.abs());
-                        format!(" ↓ {}", change_str)
+                        format!(" 🔴 -{}", change_str) // Red circle
                     } else {
-                        " ↔".to_string()
+                        String::new()
                     }
                 }
             } else {

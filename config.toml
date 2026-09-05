@@ -4,6 +4,7 @@ url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=e
 price_path = "bitcoin.eur"
 unit = "EUR"
 poll_interval = "1m"
+symbol = "💰"
 
 [[assets]]
 name = "Gold"
@@ -11,6 +12,7 @@ url = "https://xaus.com/api/v1/spot?currency=EUR"
 price_path = "xau.price"
 unit = "EUR"
 poll_interval = "1h"
+symbol = "🥇"
 
 [[assets]]
 name = "Gas"
@@ -18,3 +20,4 @@ url = "https://eurooilwatch.com/api/v1/gas"
 price_path = "ttf.priceEurMwh"
 unit = "EUR"
 poll_interval = "24h"
+symbol = "🔥"
