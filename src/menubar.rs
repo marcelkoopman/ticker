@@ -7,7 +7,6 @@ use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
-use webbrowser;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -209,22 +208,19 @@ impl App {
 
         let menu = MenuBuilder::build(&prices_with_history, &self.poller);
 
-        match self.tray.try_borrow_mut() {
-            Ok(tray) => {
-                tray.set_menu(Some(Box::new(menu)));
+        if let Ok(tray) = self.tray.try_borrow_mut() {
+            tray.set_menu(Some(Box::new(menu)));
 
-                // Icon: alert if changes detected, otherwise normal
-                let icon = if self.has_changes() {
-                    self.alert_icon.clone()
-                } else {
-                    self.normal_icon.clone()
-                };
-                let _ = tray.set_icon(Some(icon));
+            // Icon: alert if changes detected, otherwise normal
+            let icon = if self.has_changes() {
+                self.alert_icon.clone()
+            } else {
+                self.normal_icon.clone()
+            };
+            let _ = tray.set_icon(Some(icon));
 
-                // Optional: update title (you can keep "Ticker" if you prefer)
-                tray.set_title(Some("Ticker"));
-            }
-            Err(_) => {}
+            // Optional: update title (you can keep "Ticker" if you prefer)
+            tray.set_title(Some("Ticker"));
         }
     }
 }
