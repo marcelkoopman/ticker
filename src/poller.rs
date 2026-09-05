@@ -35,11 +35,11 @@ impl Poller {
     }
 
     pub fn mark_polled(&mut self, asset_name: &str, assets: &[Asset]) {
-        if let Some(asset) = assets.iter().find(|a| a.name == asset_name) {
-            if let Some(poll_info) = self.poll_times.iter_mut().find(|p| p.name == asset_name) {
-                let interval = parse_interval(&asset.poll_interval);
-                poll_info.next_poll = SystemTime::now() + interval;
-            }
+        if let Some(asset) = assets.iter().find(|a| a.name == asset_name)
+            && let Some(poll_info) = self.poll_times.iter_mut().find(|p| p.name == asset_name)
+        {
+            let interval = parse_interval(&asset.poll_interval);
+            poll_info.next_poll = SystemTime::now() + interval;
         }
     }
 

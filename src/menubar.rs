@@ -1,6 +1,7 @@
 use image::ImageReader;
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
 use std::time::SystemTime;
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
@@ -19,7 +20,7 @@ use crate::poller::Poller;
 use crate::price_fetcher::PriceFetcher;
 
 struct App {
-    tray: Arc<Mutex<TrayIcon>>,
+    tray: Rc<RefCell<TrayIcon>>,
     fetcher: PriceFetcher,
     poller: Poller,
     config: crate::config::Config,
@@ -173,12 +174,13 @@ impl App {
     /// Check if any asset has changed price (for alert icon)
     fn has_changes(&self) -> bool {
         for (name, price, _unit) in &self.prices {
-            if let Some(prev) = self.price_history.get(name) {
-                if !price.is_nan() && !prev.is_nan() {
-                    let diff = price - prev;
-                    if diff.abs() > 0.01 {
-                        return true;
-                    }
+            if let Some(prev) = self.price_history.get(name)
+                && !price.is_nan()
+                && !prev.is_nan()
+            {
+                let diff = price - prev;
+                if diff.abs() > 0.01 {
+                    return true;
                 }
             }
         }
@@ -207,19 +209,22 @@ impl App {
 
         let menu = MenuBuilder::build(&prices_with_history, &self.poller);
 
-        if let Ok(tray) = self.tray.lock() {
-            tray.set_menu(Some(Box::new(menu)));
+        match self.tray.try_borrow_mut() {
+            Ok(tray) => {
+                tray.set_menu(Some(Box::new(menu)));
 
-            // Icon: alert if changes detected, otherwise normal
-            let icon = if self.has_changes() {
-                self.alert_icon.clone()
-            } else {
-                self.normal_icon.clone()
-            };
-            let _ = tray.set_icon(Some(icon));
+                // Icon: alert if changes detected, otherwise normal
+                let icon = if self.has_changes() {
+                    self.alert_icon.clone()
+                } else {
+                    self.normal_icon.clone()
+                };
+                let _ = tray.set_icon(Some(icon));
 
-            // Optional: update title (you can keep "Ticker" if you prefer)
-            tray.set_title(Some("Ticker"));
+                // Optional: update title (you can keep "Ticker" if you prefer)
+                tray.set_title(Some("Ticker"));
+            }
+            Err(_) => {}
         }
     }
 }
@@ -268,7 +273,7 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
         .with_title("Ticker")
         .build()?;
 
-    let tray = Arc::new(Mutex::new(tray_icon));
+    let tray = Rc::new(RefCell::new(tray_icon));
 
     let event_loop = EventLoop::new()?;
 
