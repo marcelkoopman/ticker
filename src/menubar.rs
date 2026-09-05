@@ -5,16 +5,17 @@ use crate::price_fetcher::fetch_prices;
 use crate::price_tracker;
 
 use chrono::{Duration as ChronoDuration, Local};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
-use std::sync::{Arc, Mutex, mpsc};
+use std::rc::Rc;
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tray_icon::{
     TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
-use webbrowser;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -22,7 +23,7 @@ use winit::{
 };
 
 struct App {
-    tray: Arc<Mutex<TrayIcon>>,
+    tray: Rc<RefCell<TrayIcon>>,
     links: HashMap<String, String>,
     startup_fetch_done: bool,
     fetch_in_progress: bool,
@@ -72,10 +73,10 @@ fn market_indicator_with_counts(prices: &[Price]) -> (String, u32, u32) {
 
 fn spawn_price_fetcher(tx: mpsc::Sender<Vec<Price>>) {
     thread::spawn(move || {
-        if let Ok(config) = load_config() {
-            if let Ok(prices) = fetch_prices(&config.assets) {
-                let _ = tx.send(prices);
-            }
+        if let Ok(config) = load_config()
+            && let Ok(prices) = fetch_prices(&config.assets)
+        {
+            let _ = tx.send(prices);
         }
     });
 }
@@ -90,10 +91,9 @@ impl App {
             &self.last_update_timestamp,
         );
 
-        if let Ok(tray) = self.tray.lock() {
-            tray.set_title(Some(title.as_str()));
-            tray.set_menu(Some(Box::new(menu)));
-        }
+        let tray = self.tray.borrow_mut();
+        tray.set_title(Some(title.as_str()));
+        tray.set_menu(Some(Box::new(menu)));
     }
 
     fn start_background_fetch(&mut self) {
@@ -200,8 +200,8 @@ impl ApplicationHandler for App {
     }
 }
 
-pub fn run_menubar() -> Result<(), Box<dyn Error>> {
-    eprintln!("🎯 Ticker app started");
+pub fn initialize_app() -> Result<(), Box<dyn Error>> {
+    eprintln!("🚀 Ticker app starting...");
     eprintln!("🔧 Initializing menubar...");
 
     let mut links = HashMap::new();
@@ -228,7 +228,7 @@ pub fn run_menubar() -> Result<(), Box<dyn Error>> {
         .with_title("Ticker")
         .build()?;
 
-    let tray = Arc::new(Mutex::new(tray_icon));
+    let tray = Rc::new(RefCell::new(tray_icon));
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -252,4 +252,8 @@ pub fn run_menubar() -> Result<(), Box<dyn Error>> {
     event_loop.run_app(&mut app)?;
 
     Ok(())
+}
+
+pub fn run_menubar() -> Result<(), Box<dyn Error>> {
+    initialize_app()
 }
