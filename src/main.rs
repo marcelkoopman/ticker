@@ -4,6 +4,7 @@ mod price_fetcher;
 mod formatter;
 mod menu_builder;
 mod models;
+mod price_tracker;
 
 fn main() {
     eprintln!("🚀 Ticker app starting...");

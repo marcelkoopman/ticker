@@ -1,9 +1,3 @@
-use chrono::Local;
-
-pub fn current_timestamp() -> String {
-    Local::now().format("%H:%M:%S").to_string()
-}
-
 pub fn format_price(price: f64) -> String {
     if price.is_nan() {
         return "?".to_string();
