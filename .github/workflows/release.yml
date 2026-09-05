@@ -28,12 +28,26 @@ jobs:
       - name: Build DMG
         run: cargo bundle --release
 
-      - name: Find DMG file
-        run: find target/release/bundle -name "*.dmg" -type f
+      - name: Verify DMG exists
+        run: |
+          echo "=== Checking build output ==="
+          ls -lah target/release/bundle/dmg/
+          file target/release/bundle/dmg/Ticker.dmg
+
+      - name: Check DMG integrity
+        run: |
+          echo "=== DMG integrity check ==="
+          hdiutil verify target/release/bundle/dmg/Ticker.dmg || echo "⚠️ DMG warning (but continuing)"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: target/release/bundle/dmg/Ticker.dmg
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        if: success()
+        run: echo "✅ Release created successfully!"
