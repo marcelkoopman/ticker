@@ -1,5 +1,8 @@
 name: Build Release DMG
 
+permissions:
+  contents: write
+
 on:
   push:
     tags:
@@ -13,7 +16,7 @@ jobs:
     name: Build DMG
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -31,7 +34,6 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/bundle/osx/*.dmg
-          token: ${{ secrets.GITHUB_TOKEN }}
+          files: target/release/bundle/dmg/Ticker.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
