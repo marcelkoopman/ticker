@@ -42,21 +42,27 @@ jobs:
           codesign --force --deep --sign - target/aarch64-apple-darwin/release/bundle/osx/Ticker.app
           codesign -v target/aarch64-apple-darwin/release/bundle/osx/Ticker.app
 
-      - name: Create DMG with Applications link and app icon
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create professional DMG
         run: |
-          mkdir -p dmg_temp
-          cp -R target/aarch64-apple-darwin/release/bundle/osx/Ticker.app dmg_temp/
-          ln -s /Applications dmg_temp/Applications
+          create-dmg \
+            --volname "Ticker" \
+            --volicon target/aarch64-apple-darwin/release/bundle/osx/Ticker.app/Contents/Resources/icon.icns \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "Ticker.app" 150 190 \
+            --icon "Applications" 450 190 \
+            --hide-extension "Ticker.app" \
+            --app-drop-link 450 190 \
+            target/aarch64-apple-darwin/release/bundle/dmg/Ticker-temp.dmg \
+            target/aarch64-apple-darwin/release/bundle/osx/Ticker.app
 
-          hdiutil create \
-            -volname "Ticker" \
-            -srcfolder dmg_temp \
-            -ov \
-            -format UDZO \
-            -volicon target/aarch64-apple-darwin/release/bundle/osx/Ticker.app/Contents/Resources/icon.icns \
-            target/aarch64-apple-darwin/release/bundle/dmg/Ticker.dmg
-
-          rm -rf dmg_temp
+      - name: Move DMG to final location
+        run: |
+          mv target/aarch64-apple-darwin/release/bundle/dmg/Ticker-temp.dmg target/aarch64-apple-darwin/release/bundle/dmg/Ticker.dmg
 
       - name: Verify DMG
         run: |
@@ -75,3 +81,7 @@ jobs:
           files: target/aarch64-apple-darwin/release/bundle/dmg/Ticker-*.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        if: success()
+        run: echo "✅ Professional DMG release created!"
