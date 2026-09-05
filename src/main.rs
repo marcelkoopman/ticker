@@ -3,7 +3,6 @@ use std::io::Write;
 use std::path::PathBuf;
 
 mod config;
-mod formatter;
 mod menu_builder;
 mod menubar;
 mod poller;

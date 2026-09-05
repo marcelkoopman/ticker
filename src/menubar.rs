@@ -8,7 +8,7 @@ use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
-use webbrowser; // Used in match statement
+// Used in match statement
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -110,9 +110,8 @@ impl ApplicationHandler for App {
 
         // Sleep until next_check
         if let Ok(duration) = self.next_check.duration_since(SystemTime::now()) {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(
-                std::time::Instant::now() + duration,
-            ));
+            event_loop
+                .set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + duration));
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
         }
@@ -123,7 +122,9 @@ impl App {
     fn poll_due_assets(&mut self, force: bool) {
         let Some(config) = &self.config else { return };
         let Some(fetcher) = &self.fetcher else { return };
-        let Some(poller) = &mut self.poller else { return };
+        let Some(poller) = &mut self.poller else {
+            return;
+        };
 
         let new_prices = fetcher.fetch_all(&config.assets);
         eprintln!("🔍 Checking {} assets for updates...", new_prices.len());
@@ -160,11 +161,15 @@ impl App {
             if let Some(pos) = self.prices.iter().position(|(name, _, _)| name == new_name) {
                 self.prices[pos] = (new_name.clone(), *new_price, new_unit.clone());
             } else {
-                self.prices.push((new_name.clone(), *new_price, new_unit.clone()));
+                self.prices
+                    .push((new_name.clone(), *new_price, new_unit.clone()));
             }
 
             poller.mark_polled(new_name, &config.assets);
-            eprintln!("  ✓ {} → {} {}{}", new_name, price_str, new_unit, change_note);
+            eprintln!(
+                "  ✓ {} → {} {}{}",
+                new_name, price_str, new_unit, change_note
+            );
             updated_count += 1;
 
             updates.push((new_name.clone(), *new_price));
@@ -207,7 +212,10 @@ impl App {
 
     fn has_changes(&self) -> bool {
         for (name, price, _unit) in &self.prices {
-            if let Some(prev) = self.price_history.get(name) && !price.is_nan() && !prev.is_nan() {
+            if let Some(prev) = self.price_history.get(name)
+                && !price.is_nan()
+                && !prev.is_nan()
+            {
                 let diff = price - prev;
                 if diff.abs() > 0.01 {
                     return true;
@@ -258,7 +266,11 @@ impl App {
         let menu = Menu::new();
 
         if let Some(error) = &self.config_error {
-            let _ = menu.append(&MenuItem::new(format!("❌ {}", error).as_str(), false, None));
+            let _ = menu.append(&MenuItem::new(
+                format!("❌ {}", error).as_str(),
+                false,
+                None,
+            ));
         } else {
             let _ = menu.append(&MenuItem::new("⏳ Loading config...", false, None));
         }
@@ -319,7 +331,10 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
     let mut links = HashMap::new();
     links.insert("bitcoin".to_string(), "https://bitcoin.nl".to_string());
     links.insert("gold".to_string(), "https://xaus.com".to_string());
-    links.insert("ttf_gas".to_string(), "https://eurooilwatch.com".to_string());
+    links.insert(
+        "ttf_gas".to_string(),
+        "https://eurooilwatch.com".to_string(),
+    );
 
     // Initial menu: loading state (show menu immediately)
     eprintln!("🎨 Creating initial menubar...");
