@@ -30,19 +30,3 @@ pub fn load_price_history() -> Result<HashMap<String, PriceSnapshot>, Box<dyn Er
     let history: PriceHistory = serde_json::from_str(&data)?;
     Ok(history.prices)
 }
-
-pub fn save_price_history(prices: &HashMap<String, PriceSnapshot>) -> Result<(), Box<dyn Error>> {
-    let path = price_history_path();
-    let history = PriceHistory {
-        prices: prices.clone(),
-    };
-    fs::write(&path, serde_json::to_string_pretty(&history)?)?;
-    Ok(())
-}
-
-pub fn update_price_history(name: &str, price: f64) -> Result<(), Box<dyn Error>> {
-    let mut history = load_price_history()?;
-    history.insert(name.to_string(), PriceSnapshot { value: price });
-    save_price_history(&history)?;
-    Ok(())
-}

@@ -160,14 +160,19 @@ impl App {
                 format!("{:.2}", new_price)
             };
 
+            let price_changed = if let Some(old) = old_price {
+                (old - new_price).abs() > 0.01
+            } else {
+                true // First time seeing this price
+            };
+
             let change_note = if let Some(old) = old_price {
                 if (old - new_price).abs() < 0.01 {
                     " (no change)".to_string()
                 } else {
                     let diff = new_price - old;
-                    let percent = (diff / old) * 100.0;
                     let sign = if diff > 0.0 { "+" } else { "" };
-                    format!(" ({}{:.2}, {}{:.2}%)", sign, diff, sign, percent)
+                    format!(" ({}{:.2})", sign, diff)
                 }
             } else {
                 "".to_string()
@@ -185,20 +190,23 @@ impl App {
                 "  ✓ {} → {} {}{}",
                 new_name, price_str, new_unit, change_note
             );
-            updated_count += 1;
 
-            updates.push((new_name.clone(), *new_price));
+            if price_changed {
+                // Only add if price actually changed
+                updates.push((new_name.clone(), *new_price));
+                updated_count += 1;
+            }
         }
 
         eprintln!("📊 Update complete: {} updated", updated_count);
 
-        // Update menu BEFORE updating price_history
-        self.update_menu();
+        // Only update menu if prices actually changed
+        if !updates.is_empty() {
+            self.update_menu();
+        }
 
-        // NOW save the new prices for next comparison
         for (name, price) in updates {
-            self.price_history.insert(name.clone(), price);
-            let _ = price_history::update_price_history(&name, price);
+            self.price_history.insert(name, price);
         }
     }
 
