@@ -9,6 +9,11 @@ mod poller;
 mod price_fetcher;
 mod price_history;
 
+// Add dhat allocator (only when feature enabled)
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 fn log_file_path() -> PathBuf {
     let home = dirs::home_dir().expect("Cannot find home directory");
     home.join(".ticker_debug.log")
@@ -38,6 +43,10 @@ fn main() {
     log_message(&format!("Log file: {:?}", log_path));
     log_message(&format!("Working dir: {:?}", std::env::current_dir()));
     log_message(&format!("Executable: {:?}", std::env::current_exe()));
+
+    // Start dhat profiler (only when feature enabled)
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
 
     match menubar::run_menubar() {
         Ok(_) => log_message("✓ Ticker app exited normally"),
