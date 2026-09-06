@@ -4,12 +4,12 @@ use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
 pub struct MenuBuilder;
 
 impl MenuBuilder {
-    pub fn build(prices: &[(String, f64, String, Option<f64>, String)], poller: &Poller) -> Menu {
+    pub fn build(prices: &[(String, f64, String, Option<f64>, String)], _poller: &Poller) -> Menu {
         let menu = Menu::new();
 
         for (name, price, unit, prev_price, symbol) in prices {
             let formatted_price = Self::format_price(*price);
-            let currency_symbol = Self::unit_to_currency(&unit);
+            let currency_symbol = Self::unit_to_currency(unit);
 
             let change_indicator = if let Some(prev) = prev_price {
                 if price.is_nan() || prev.is_nan() {

@@ -1,5 +1,4 @@
 use crate::config::Asset;
-use chrono::{DateTime, Local};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
@@ -41,16 +40,6 @@ impl Poller {
             let interval = parse_interval(&asset.poll_interval);
             poll_info.next_poll = SystemTime::now() + interval;
         }
-    }
-
-    pub fn next_poll_in(&self, asset_name: &str) -> Option<String> {
-        self.poll_times
-            .iter()
-            .find(|p| p.name == asset_name)
-            .map(|p| {
-                let datetime: DateTime<Local> = p.next_poll.into();
-                datetime.format("%H:%M:%S").to_string()
-            })
     }
 
     pub fn time_until_poll(&self, asset_name: &str) -> Option<std::time::Duration> {
