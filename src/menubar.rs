@@ -19,6 +19,7 @@ use crate::config::load_config;
 use crate::menu_builder::MenuBuilder;
 use crate::poller::Poller;
 use crate::price_fetcher::PriceFetcher;
+use crate::price_history;
 
 struct App {
     tray: Rc<RefCell<TrayIcon>>,
@@ -59,6 +60,19 @@ impl ApplicationHandler for App {
                     self.config = Some(config.clone());
                     self.poller = Some(Poller::new(&config.assets));
                     self.config_error = None;
+
+                    // Load previous session's price history
+                    match price_history::load_price_history() {
+                        Ok(history) => {
+                            for (name, snapshot) in history {
+                                self.price_history.insert(name, snapshot.value);
+                            }
+                            eprintln!("✓ Loaded price history from disk");
+                        }
+                        Err(_) => {
+                            eprintln!("ℹ️  No previous price history found");
+                        }
+                    }
 
                     // Fetch prices immediately after config loads
                     if self.fetcher.is_some() {
@@ -177,10 +191,13 @@ impl App {
 
         eprintln!("📊 Update complete: {} updated", updated_count);
 
+        // Update menu BEFORE updating price_history
         self.update_menu();
 
+        // NOW save the new prices for next comparison
         for (name, price) in updates {
-            self.price_history.insert(name, price);
+            self.price_history.insert(name.clone(), price);
+            let _ = price_history::update_price_history(&name, price);
         }
     }
 

@@ -7,6 +7,7 @@ mod menu_builder;
 mod menubar;
 mod poller;
 mod price_fetcher;
+mod price_history;
 
 fn log_file_path() -> PathBuf {
     let home = dirs::home_dir().expect("Cannot find home directory");
