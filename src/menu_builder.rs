@@ -9,8 +9,8 @@ impl MenuBuilder {
 
         for (name, price, unit, prev_price, symbol) in prices {
             let formatted_price = Self::format_price(*price);
+            let currency_symbol = Self::unit_to_currency(&unit);
 
-            // Calculate price change indicator
             let change_indicator = if let Some(prev) = prev_price {
                 if price.is_nan() || prev.is_nan() {
                     String::new()
@@ -18,10 +18,12 @@ impl MenuBuilder {
                     let diff = price - prev;
                     if diff > 0.01 {
                         let change_str = Self::format_price(diff);
-                        format!(" 🟢 +{}", change_str) // Green circle
+                        let percent = (diff / prev) * 100.0;
+                        format!(" 🟢 {} {} (+{:.2}%)", currency_symbol, change_str, percent)
                     } else if diff < -0.01 {
                         let change_str = Self::format_price(diff.abs());
-                        format!(" 🔴 -{}", change_str) // Red circle
+                        let percent = (diff / prev) * 100.0;
+                        format!(" 🔴 {} {} ({:.2}%)", currency_symbol, change_str, percent)
                     } else {
                         String::new()
                     }
@@ -30,15 +32,9 @@ impl MenuBuilder {
                 String::new()
             };
 
-            // Show timestamp
-            let poll_display = poller
-                .next_poll_in(name)
-                .map(|s| format!("({})", s))
-                .unwrap_or_default();
-
             let row = format!(
-                "{} {} — {} {}{} {}",
-                symbol, name, formatted_price, unit, change_indicator, poll_display
+                "{} {} — {} {}{}",
+                symbol, name, currency_symbol, formatted_price, change_indicator
             );
 
             let item_id = name.to_lowercase().replace(" ", "_");
@@ -80,6 +76,16 @@ impl MenuBuilder {
             format!("{},{}", result, decimal_part)
         } else {
             formatted
+        }
+    }
+
+    fn unit_to_currency(unit: &str) -> String {
+        match unit {
+            "EUR" => "€".to_string(),
+            "USD" => "$".to_string(),
+            "GBP" => "£".to_string(),
+            "JPY" => "¥".to_string(),
+            _ => unit.to_string(),
         }
     }
 }

@@ -165,8 +165,9 @@ impl App {
                     " (no change)".to_string()
                 } else {
                     let diff = new_price - old;
+                    let percent = (diff / old) * 100.0;
                     let sign = if diff > 0.0 { "+" } else { "" };
-                    format!(" ({}{:.2})", sign, diff)
+                    format!(" ({}{:.2}, {}{:.2}%)", sign, diff, sign, percent)
                 }
             } else {
                 "".to_string()
