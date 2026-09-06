@@ -47,55 +47,6 @@ pub fn update_price_history(name: &str, price: f64) -> Result<(), Box<dyn Error>
     Ok(())
 }
 
-pub fn get_delta(name: &str, current_price: f64) -> Result<String, Box<dyn Error>> {
-    let history = load_price_history()?;
-
-    if let Some(snapshot) = history.get(name) {
-        let delta = current_price - snapshot.value;
-        let percent = if snapshot.value != 0.0 {
-            (delta / snapshot.value) * 100.0
-        } else {
-            0.0
-        };
-
-        if delta > 0.001 {
-            Ok(format!("🟢 +{:.2} (+{:.2}%)", delta, percent))
-        } else if delta < -0.001 {
-            Ok(format!("🔴 {:.2} ({:.2}%)", delta, percent))
-        } else {
-            Ok("⚪".to_string())
-        }
-    } else {
-        Ok("⚪".to_string())
-    }
-}
-
-pub fn get_delta_simple(name: &str, current_price: f64) -> Result<String, Box<dyn Error>> {
-    let history = load_price_history()?;
-
-    if let Some(snapshot) = history.get(name) {
-        let delta = current_price - snapshot.value;
-
-        if delta > 0.001 {
-            Ok(format!("🟢 +{:.2}", delta))
-        } else if delta < -0.001 {
-            Ok(format!("🔴 {:.2}", delta))
-        } else {
-            Ok("⚪".to_string())
-        }
-    } else {
-        Ok("⚪".to_string())
-    }
-}
-
-pub fn clear_price_history() -> Result<(), Box<dyn Error>> {
-    let path = price_history_path();
-    if path.exists() {
-        fs::remove_file(&path)?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
