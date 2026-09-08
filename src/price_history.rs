@@ -85,10 +85,7 @@ mod tests {
         let _ = fs::remove_file(&path);
 
         let mut prices = HashMap::new();
-        prices.insert(
-            "Bitcoin".to_string(),
-            PriceSnapshot { value: 95000.5 },
-        );
+        prices.insert("Bitcoin".to_string(), PriceSnapshot { value: 95000.5 });
         prices.insert("Gold".to_string(), PriceSnapshot { value: 2650.0 });
 
         save_price_history_to(&path, &prices).unwrap();

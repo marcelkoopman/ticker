@@ -10,8 +10,7 @@ impl MenuBuilder {
         for (name, price, unit, prev_price, symbol) in prices {
             let formatted_price = Self::format_price(*price);
             let currency_symbol = Self::unit_to_currency(unit);
-            let change_indicator =
-                Self::change_indicator(*price, *prev_price, &currency_symbol);
+            let change_indicator = Self::change_indicator(*price, *prev_price, &currency_symbol);
 
             let row = format!(
                 "{} {} — {} {}{}",
@@ -167,10 +166,7 @@ mod tests {
 
     #[test]
     fn change_indicator_none_when_unchanged() {
-        assert_eq!(
-            MenuBuilder::change_indicator(100.0, Some(100.005), "€"),
-            ""
-        );
+        assert_eq!(MenuBuilder::change_indicator(100.0, Some(100.005), "€"), "");
     }
 
     #[test]
