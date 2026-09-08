@@ -185,9 +185,10 @@ mod tests {
                 {"symbol": "BTC", "price": 50000.0}
             ]
         });
-        assert!(f
-            .get_value_by_path(&data, "items.symbol=ETH.price")
-            .is_none());
+        assert!(
+            f.get_value_by_path(&data, "items.symbol=ETH.price")
+                .is_none()
+        );
     }
 
     #[test]
