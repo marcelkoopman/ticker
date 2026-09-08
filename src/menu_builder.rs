@@ -89,3 +89,48 @@ impl MenuBuilder {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_price_nan() {
+        assert_eq!(MenuBuilder::format_price(f64::NAN), "?");
+    }
+
+    #[test]
+    fn format_price_simple() {
+        assert_eq!(MenuBuilder::format_price(12.34), "12,34");
+        assert_eq!(MenuBuilder::format_price(0.5), "0,50");
+        assert_eq!(MenuBuilder::format_price(100.0), "100,00");
+    }
+
+    #[test]
+    fn format_price_thousands_separator() {
+        assert_eq!(MenuBuilder::format_price(1234.56), "1.234,56");
+        assert_eq!(MenuBuilder::format_price(1234567.89), "1.234.567,89");
+        assert_eq!(MenuBuilder::format_price(1000.0), "1.000,00");
+    }
+
+    #[test]
+    fn format_price_negative() {
+        // Negative prices are rare but should still format
+        let s = MenuBuilder::format_price(-42.5);
+        assert!(s.contains("42,50") || s.contains("-42,50"));
+    }
+
+    #[test]
+    fn unit_to_currency_known() {
+        assert_eq!(MenuBuilder::unit_to_currency("EUR"), "€");
+        assert_eq!(MenuBuilder::unit_to_currency("USD"), "$");
+        assert_eq!(MenuBuilder::unit_to_currency("GBP"), "£");
+        assert_eq!(MenuBuilder::unit_to_currency("JPY"), "¥");
+    }
+
+    #[test]
+    fn unit_to_currency_unknown_passthrough() {
+        assert_eq!(MenuBuilder::unit_to_currency("EUR/MWh"), "EUR/MWh");
+        assert_eq!(MenuBuilder::unit_to_currency("BTC"), "BTC");
+    }
+}
