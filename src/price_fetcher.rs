@@ -120,3 +120,104 @@ impl PriceFetcher {
         Some(current)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn fetcher() -> PriceFetcher {
+        PriceFetcher::new().expect("client should build")
+    }
+
+    #[test]
+    fn simple_object_path() {
+        let f = fetcher();
+        let data = json!({"price": 42000.5});
+        let v = f.get_value_by_path(&data, "price").unwrap();
+        assert_eq!(v.as_f64(), Some(42000.5));
+    }
+
+    #[test]
+    fn nested_object_path() {
+        let f = fetcher();
+        let data = json!({
+            "data": {
+                "quote": {
+                    "EUR": {
+                        "price": 91.23
+                    }
+                }
+            }
+        });
+        let v = f.get_value_by_path(&data, "data.quote.EUR.price").unwrap();
+        assert_eq!(v.as_f64(), Some(91.23));
+    }
+
+    #[test]
+    fn array_index_path() {
+        let f = fetcher();
+        let data = json!([{"price": 10.0}, {"price": 20.0}]);
+        let v = f.get_value_by_path(&data, "1.price").unwrap();
+        assert_eq!(v.as_f64(), Some(20.0));
+    }
+
+    #[test]
+    fn array_filter_by_field() {
+        let f = fetcher();
+        let data = json!({
+            "items": [
+                {"symbol": "BTC", "price": 50000.0},
+                {"symbol": "ETH", "price": 3000.0}
+            ]
+        });
+        let v = f
+            .get_value_by_path(&data, "items.symbol=ETH.price")
+            .unwrap();
+        assert_eq!(v.as_f64(), Some(3000.0));
+    }
+
+    #[test]
+    fn array_filter_not_found() {
+        let f = fetcher();
+        let data = json!({
+            "items": [
+                {"symbol": "BTC", "price": 50000.0}
+            ]
+        });
+        assert!(f
+            .get_value_by_path(&data, "items.symbol=ETH.price")
+            .is_none());
+    }
+
+    #[test]
+    fn missing_key_returns_none() {
+        let f = fetcher();
+        let data = json!({"price": 1.0});
+        assert!(f.get_value_by_path(&data, "missing").is_none());
+        assert!(f.get_value_by_path(&data, "price.nested").is_none());
+    }
+
+    #[test]
+    fn string_value() {
+        let f = fetcher();
+        let data = json!({"price": "1234.56"});
+        let v = f.get_value_by_path(&data, "price").unwrap();
+        assert_eq!(v.as_str(), Some("1234.56"));
+    }
+
+    #[test]
+    fn invalid_array_index() {
+        let f = fetcher();
+        let data = json!([1, 2, 3]);
+        assert!(f.get_value_by_path(&data, "5").is_none());
+        assert!(f.get_value_by_path(&data, "abc").is_none());
+    }
+
+    #[test]
+    fn filter_on_non_array_returns_none() {
+        let f = fetcher();
+        let data = json!({"symbol": "BTC"});
+        assert!(f.get_value_by_path(&data, "symbol=BTC").is_none());
+    }
+}
