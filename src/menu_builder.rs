@@ -10,34 +10,15 @@ impl MenuBuilder {
         for (name, price, unit, prev_price, symbol) in prices {
             let formatted_price = Self::format_price(*price);
             let currency_symbol = Self::unit_to_currency(unit);
-
-            let change_indicator = if let Some(prev) = prev_price {
-                if price.is_nan() || prev.is_nan() {
-                    String::new()
-                } else {
-                    let diff = price - prev;
-                    if diff > 0.01 {
-                        let change_str = Self::format_price(diff);
-                        let percent = (diff / prev) * 100.0;
-                        format!(" 🟢 {} {} (+{:.2}%)", currency_symbol, change_str, percent)
-                    } else if diff < -0.01 {
-                        let change_str = Self::format_price(diff.abs());
-                        let percent = (diff / prev) * 100.0;
-                        format!(" 🔴 {} {} ({:.2}%)", currency_symbol, change_str, percent)
-                    } else {
-                        String::new()
-                    }
-                }
-            } else {
-                String::new()
-            };
+            let change_indicator =
+                Self::change_indicator(*price, *prev_price, &currency_symbol);
 
             let row = format!(
                 "{} {} — {} {}{}",
                 symbol, name, currency_symbol, formatted_price, change_indicator
             );
 
-            let item_id = name.to_lowercase().replace(" ", "_");
+            let item_id = Self::item_id(name);
             let item = MenuItem::with_id(&item_id, &row, true, None);
             let _ = menu.append(&item);
         }
@@ -51,6 +32,33 @@ impl MenuBuilder {
         let _ = menu.append(&quit_item);
 
         menu
+    }
+
+    fn item_id(name: &str) -> String {
+        name.to_lowercase().replace(' ', "_")
+    }
+
+    fn change_indicator(price: f64, prev_price: Option<f64>, currency_symbol: &str) -> String {
+        let Some(prev) = prev_price else {
+            return String::new();
+        };
+
+        if price.is_nan() || prev.is_nan() {
+            return String::new();
+        }
+
+        let diff = price - prev;
+        if diff > 0.01 {
+            let change_str = Self::format_price(diff);
+            let percent = (diff / prev) * 100.0;
+            format!(" 🟢 {} {} (+{:.2}%)", currency_symbol, change_str, percent)
+        } else if diff < -0.01 {
+            let change_str = Self::format_price(diff.abs());
+            let percent = (diff / prev) * 100.0;
+            format!(" 🔴 {} {} ({:.2}%)", currency_symbol, change_str, percent)
+        } else {
+            String::new()
+        }
     }
 
     fn format_price(price: f64) -> String {
@@ -115,7 +123,6 @@ mod tests {
 
     #[test]
     fn format_price_negative() {
-        // Negative prices are rare but should still format
         let s = MenuBuilder::format_price(-42.5);
         assert!(s.contains("42,50") || s.contains("-42,50"));
     }
@@ -132,5 +139,53 @@ mod tests {
     fn unit_to_currency_unknown_passthrough() {
         assert_eq!(MenuBuilder::unit_to_currency("EUR/MWh"), "EUR/MWh");
         assert_eq!(MenuBuilder::unit_to_currency("BTC"), "BTC");
+    }
+
+    #[test]
+    fn item_id_normalizes_name() {
+        assert_eq!(MenuBuilder::item_id("Bitcoin"), "bitcoin");
+        assert_eq!(MenuBuilder::item_id("TTF Gas"), "ttf_gas");
+        assert_eq!(MenuBuilder::item_id("ETH"), "eth");
+    }
+
+    #[test]
+    fn change_indicator_none_when_no_prev() {
+        assert_eq!(MenuBuilder::change_indicator(100.0, None, "€"), "");
+    }
+
+    #[test]
+    fn change_indicator_none_when_nan() {
+        assert_eq!(
+            MenuBuilder::change_indicator(f64::NAN, Some(100.0), "€"),
+            ""
+        );
+        assert_eq!(
+            MenuBuilder::change_indicator(100.0, Some(f64::NAN), "€"),
+            ""
+        );
+    }
+
+    #[test]
+    fn change_indicator_none_when_unchanged() {
+        assert_eq!(
+            MenuBuilder::change_indicator(100.0, Some(100.005), "€"),
+            ""
+        );
+    }
+
+    #[test]
+    fn change_indicator_up() {
+        let s = MenuBuilder::change_indicator(110.0, Some(100.0), "€");
+        assert!(s.contains("🟢"));
+        assert!(s.contains("€"));
+        assert!(s.contains("+10.00%"));
+    }
+
+    #[test]
+    fn change_indicator_down() {
+        let s = MenuBuilder::change_indicator(90.0, Some(100.0), "€");
+        assert!(s.contains("🔴"));
+        assert!(s.contains("€"));
+        assert!(s.contains("-10.00%"));
     }
 }
