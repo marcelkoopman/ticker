@@ -208,6 +208,15 @@ impl App {
         for (name, price) in updates {
             self.price_history.insert(name, price);
         }
+
+        // Persist baseline for the next session (change indicators across restarts)
+        if updated_count > 0 {
+            if let Err(e) = price_history::save_price_history(&self.price_history) {
+                eprintln!("⚠️  Failed to save price history: {}", e);
+            } else {
+                eprintln!("💾 Price history saved");
+            }
+        }
     }
 
     fn update_next_check(&mut self) {
