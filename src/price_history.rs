@@ -20,7 +20,9 @@ fn price_history_path() -> PathBuf {
 }
 
 /// Load price history from an explicit path.
-pub fn load_price_history_from(path: &Path) -> Result<HashMap<String, PriceSnapshot>, Box<dyn Error>> {
+pub fn load_price_history_from(
+    path: &Path,
+) -> Result<HashMap<String, PriceSnapshot>, Box<dyn Error>> {
     if !path.exists() {
         return Ok(HashMap::new());
     }
@@ -45,6 +47,15 @@ pub fn save_price_history_to(
 
 pub fn load_price_history() -> Result<HashMap<String, PriceSnapshot>, Box<dyn Error>> {
     load_price_history_from(&price_history_path())
+}
+
+/// Persist price values to the default history file.
+pub fn save_price_history(prices: &HashMap<String, f64>) -> Result<(), Box<dyn Error>> {
+    let snapshots: HashMap<String, PriceSnapshot> = prices
+        .iter()
+        .map(|(name, value)| (name.clone(), PriceSnapshot { value: *value }))
+        .collect();
+    save_price_history_to(&price_history_path(), &snapshots)
 }
 
 #[cfg(test)]
