@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
@@ -33,13 +33,108 @@ pub fn config_path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.toml"))
 }
 
+/// Parse a config TOML string into a Config.
+pub fn parse_config(config_str: &str) -> Result<Config, Box<dyn Error>> {
+    toml::from_str(config_str).map_err(|e| e.into())
+}
+
+/// Load config from an explicit path (useful for tests and custom locations).
+pub fn load_config_from(path: &Path) -> Result<Config, Box<dyn Error>> {
+    let config_str =
+        fs::read_to_string(path).map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
+    parse_config(&config_str)
+}
+
 pub fn load_config() -> Result<Config, Box<dyn Error>> {
     eprintln!("📋 Looking for config.toml...");
     let path = config_path()?;
     eprintln!("📂 Reading config from: {:?}", path);
+    load_config_from(&path)
+}
 
-    let config_str =
-        fs::read_to_string(&path).map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    toml::from_str(&config_str).map_err(|e| e.into())
+    fn sample_toml() -> &'static str {
+        r#"
+[[assets]]
+name = "Bitcoin"
+url = "https://example.com/btc"
+price_path = "bitcoin.eur"
+unit = "EUR"
+poll_interval = "1m"
+symbol = "💰"
+
+[[assets]]
+name = "Gold"
+url = "https://example.com/gold"
+price_path = "xau.price"
+unit = "EUR"
+poll_interval = "1h"
+symbol = "🥇"
+"#
+    }
+
+    #[test]
+    fn parse_config_valid() {
+        let config = parse_config(sample_toml()).expect("should parse");
+        assert_eq!(config.assets.len(), 2);
+        assert_eq!(config.assets[0].name, "Bitcoin");
+        assert_eq!(config.assets[0].price_path, "bitcoin.eur");
+        assert_eq!(config.assets[0].poll_interval, "1m");
+        assert_eq!(config.assets[0].symbol, "💰");
+        assert_eq!(config.assets[1].name, "Gold");
+        assert_eq!(config.assets[1].unit, "EUR");
+    }
+
+    #[test]
+    fn parse_config_empty_assets() {
+        let config = parse_config("assets = []").expect("should parse");
+        assert!(config.assets.is_empty());
+    }
+
+    #[test]
+    fn parse_config_invalid_toml() {
+        assert!(parse_config("not valid toml {{{{").is_err());
+    }
+
+    #[test]
+    fn parse_config_missing_required_field() {
+        let bad = r#"
+[[assets]]
+name = "Bitcoin"
+url = "https://example.com"
+"#;
+        assert!(parse_config(bad).is_err());
+    }
+
+    #[test]
+    fn load_config_from_file() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ticker-config-test-{}.toml", stamp));
+        fs::write(&path, sample_toml()).unwrap();
+
+        let config = load_config_from(&path).expect("should load");
+        assert_eq!(config.assets.len(), 2);
+        assert_eq!(config.assets[0].name, "Bitcoin");
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_config_from_missing_file() {
+        let path = PathBuf::from("/tmp/ticker-config-does-not-exist-xyz.toml");
+        assert!(load_config_from(&path).is_err());
+    }
+
+    #[test]
+    fn config_path_returns_some_path() {
+        let path = config_path().expect("should resolve");
+        assert!(path.to_string_lossy().contains("config.toml"));
+    }
 }
