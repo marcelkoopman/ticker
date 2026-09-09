@@ -1,4 +1,5 @@
 use crate::config::Asset;
+use polars::prelude::*;
 use reqwest::blocking::Client;
 use serde_json::Value;
 use std::error::Error;
@@ -105,18 +106,36 @@ impl PriceFetcher {
         }
     }
 
-    pub fn fetch_all(&self, assets: &[Asset]) -> Vec<(String, f64, String)> {
-        assets
-            .iter()
-            .map(|asset| {
-                let price = self.fetch_price(asset);
-                (asset.name.clone(), price, asset.unit.clone())
-            })
-            .collect()
+    /// Fetch all assets once and return them as a single Polars DataFrame.
+    ///
+    /// Columns: `symbol`, `name`, `price`, `unit`
+    pub fn fetch_all(&self, assets: &[Asset]) -> Result<DataFrame, Box<dyn Error>> {
+        let mut symbols: Vec<String> = Vec::with_capacity(assets.len());
+        let mut names: Vec<String> = Vec::with_capacity(assets.len());
+        let mut prices: Vec<f64> = Vec::with_capacity(assets.len());
+        let mut units: Vec<String> = Vec::with_capacity(assets.len());
+
+        for asset in assets {
+            let price = self.fetch_price(asset);
+            symbols.push(asset.symbol.clone());
+            names.push(asset.name.clone());
+            prices.push(price);
+            units.push(asset.unit.clone());
+        }
+
+        let df = DataFrame::new(vec![
+            Series::new("symbol".into(), symbols).into(),
+            Series::new("name".into(), names).into(),
+            Series::new("price".into(), prices).into(),
+            Series::new("unit".into(), units).into(),
+        ])?;
+
+        eprintln!("📊 Fetched DataFrame:\n{df}");
+        Ok(df)
     }
 
     fn get_value_by_path(&self, value: &Value, path: &str) -> Option<Value> {
-        let mut current = value.clone(); // Work with owned Value
+        let mut current = value.clone();
 
         for part in path.split('.') {
             if part.contains('=') {
@@ -165,6 +184,15 @@ mod tests {
     #[test]
     fn max_fetch_attempts_is_three() {
         assert_eq!(MAX_FETCH_ATTEMPTS, 3);
+    }
+
+    #[test]
+    fn empty_assets_dataframe() {
+        let f = fetcher();
+        let df = f.fetch_all(&[]).expect("empty df");
+        assert_eq!(df.height(), 0);
+        assert_eq!(df.width(), 4);
+        assert_eq!(df.get_column_names(), &["symbol", "name", "price", "unit"]);
     }
 
     #[test]
