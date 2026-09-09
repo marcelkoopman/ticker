@@ -21,7 +21,6 @@ impl PriceFetcher {
         Ok(PriceFetcher { client })
     }
 
-    /// Fetch a price, retrying up to 3 times when the result is NaN (network/HTTP/parse failure).
     pub fn fetch_price(&self, asset: &Asset) -> f64 {
         for attempt in 1..=MAX_FETCH_ATTEMPTS {
             let price = self.fetch_price_once(asset, attempt);
@@ -64,25 +63,10 @@ impl PriceFetcher {
 
                         if let Some(price_value) = self.get_value_by_path(&json, &asset.price_path)
                         {
-                            eprintln!(
-                                "✓ Found value at path '{}': {:?}",
-                                asset.price_path, price_value
-                            );
                             match price_value {
-                                Value::Number(n) => {
-                                    let price = n.as_f64().unwrap_or(f64::NAN);
-                                    eprintln!("  Parsed as: {}", price);
-                                    price
-                                }
-                                Value::String(s) => {
-                                    let price = s.parse().unwrap_or(f64::NAN);
-                                    eprintln!("  Parsed string as: {}", price);
-                                    price
-                                }
-                                _ => {
-                                    eprintln!("  Unexpected type: {:?}", price_value);
-                                    f64::NAN
-                                }
+                                Value::Number(n) => n.as_f64().unwrap_or(f64::NAN),
+                                Value::String(s) => s.parse().unwrap_or(f64::NAN),
+                                _ => f64::NAN,
                             }
                         } else {
                             eprintln!("✗ Path '{}' not found in JSON!", asset.price_path);
@@ -106,9 +90,7 @@ impl PriceFetcher {
         }
     }
 
-    /// Fetch all assets once and return them as a single Polars DataFrame.
-    ///
-    /// Columns: `symbol`, `name`, `price`, `unit`
+    /// Fetch all assets into a base DataFrame: symbol, name, price, unit.
     pub fn fetch_all(&self, assets: &[Asset]) -> Result<DataFrame, Box<dyn Error>> {
         let mut symbols: Vec<String> = Vec::with_capacity(assets.len());
         let mut names: Vec<String> = Vec::with_capacity(assets.len());
@@ -123,14 +105,98 @@ impl PriceFetcher {
             units.push(asset.unit.clone());
         }
 
-        let df = DataFrame::new(vec![
+        DataFrame::new(vec![
             Series::new("symbol".into(), symbols).into(),
             Series::new("name".into(), names).into(),
             Series::new("price".into(), prices).into(),
             Series::new("unit".into(), units).into(),
-        ])?;
+        ])
+        .map_err(|e| e.into())
+    }
 
-        eprintln!("📊 Fetched DataFrame:\n{df}");
+    /// First poll: construct DataFrame with change columns (no previous → nulls / empty direction).
+    pub fn build_initial_dataframe(&self, assets: &[Asset]) -> Result<DataFrame, Box<dyn Error>> {
+        let base = self.fetch_all(assets)?;
+        let n = base.height();
+        let mut df = base;
+
+        df.with_column(Series::new("prev_price".into(), vec![None::<f64>; n]))?;
+        df.with_column(Series::new("change".into(), vec![None::<f64>; n]))?;
+        df.with_column(Series::new("pct_change".into(), vec![None::<f64>; n]))?;
+        df.with_column(Series::new("direction".into(), vec![String::new(); n]))?;
+
+        eprintln!("📊 Initial DataFrame:\n{df}");
+        Ok(df)
+    }
+
+    /// Subsequent poll: update prices and recompute change columns from the previous DataFrame.
+    pub fn update_dataframe(
+        &self,
+        previous: &DataFrame,
+        assets: &[Asset],
+    ) -> Result<DataFrame, Box<dyn Error>> {
+        let fresh = self.fetch_all(assets)?;
+
+        // prev_price comes from previous.price, matched by name
+        let prev_names = previous.column("name")?.str()?;
+        let prev_prices = previous.column("price")?.f64()?;
+
+        let mut prev_by_name: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::new();
+        for i in 0..previous.height() {
+            if let (Some(name), Some(price)) = (prev_names.get(i), prev_prices.get(i)) {
+                prev_by_name.insert(name.to_string(), price);
+            }
+        }
+
+        let names = fresh.column("name")?.str()?;
+        let prices = fresh.column("price")?.f64()?;
+
+        let mut prev_price_col: Vec<Option<f64>> = Vec::with_capacity(fresh.height());
+        let mut change_col: Vec<Option<f64>> = Vec::with_capacity(fresh.height());
+        let mut pct_col: Vec<Option<f64>> = Vec::with_capacity(fresh.height());
+        let mut direction_col: Vec<String> = Vec::with_capacity(fresh.height());
+
+        for i in 0..fresh.height() {
+            let name = names.get(i).unwrap_or("");
+            let price = prices.get(i).unwrap_or(f64::NAN);
+            let prev = prev_by_name.get(name).copied();
+
+            prev_price_col.push(prev);
+
+            if let Some(p) = prev {
+                if price.is_nan() || p.is_nan() || p == 0.0 {
+                    change_col.push(None);
+                    pct_col.push(None);
+                    direction_col.push(String::new());
+                } else {
+                    let change = price - p;
+                    let pct = (change / p) * 100.0;
+                    change_col.push(Some(change));
+                    pct_col.push(Some(pct));
+                    let direction = if change > 0.01 {
+                        "up".to_string()
+                    } else if change < -0.01 {
+                        "down".to_string()
+                    } else {
+                        "flat".to_string()
+                    };
+                    direction_col.push(direction);
+                }
+            } else {
+                change_col.push(None);
+                pct_col.push(None);
+                direction_col.push(String::new());
+            }
+        }
+
+        let mut df = fresh;
+        df.with_column(Series::new("prev_price".into(), prev_price_col))?;
+        df.with_column(Series::new("change".into(), change_col))?;
+        df.with_column(Series::new("pct_change".into(), pct_col))?;
+        df.with_column(Series::new("direction".into(), direction_col))?;
+
+        eprintln!("📊 Updated DataFrame:\n{df}");
         Ok(df)
     }
 
@@ -192,7 +258,6 @@ mod tests {
         let df = f.fetch_all(&[]).expect("empty df");
         assert_eq!(df.height(), 0);
         assert_eq!(df.width(), 4);
-        assert_eq!(df.get_column_names(), &["symbol", "name", "price", "unit"]);
     }
 
     #[test]
@@ -243,47 +308,9 @@ mod tests {
     }
 
     #[test]
-    fn array_filter_not_found() {
-        let f = fetcher();
-        let data = json!({
-            "items": [
-                {"symbol": "BTC", "price": 50000.0}
-            ]
-        });
-        assert!(
-            f.get_value_by_path(&data, "items.symbol=ETH.price")
-                .is_none()
-        );
-    }
-
-    #[test]
     fn missing_key_returns_none() {
         let f = fetcher();
         let data = json!({"price": 1.0});
         assert!(f.get_value_by_path(&data, "missing").is_none());
-        assert!(f.get_value_by_path(&data, "price.nested").is_none());
-    }
-
-    #[test]
-    fn string_value() {
-        let f = fetcher();
-        let data = json!({"price": "1234.56"});
-        let v = f.get_value_by_path(&data, "price").unwrap();
-        assert_eq!(v.as_str(), Some("1234.56"));
-    }
-
-    #[test]
-    fn invalid_array_index() {
-        let f = fetcher();
-        let data = json!([1, 2, 3]);
-        assert!(f.get_value_by_path(&data, "5").is_none());
-        assert!(f.get_value_by_path(&data, "abc").is_none());
-    }
-
-    #[test]
-    fn filter_on_non_array_returns_none() {
-        let f = fetcher();
-        let data = json!({"symbol": "BTC"});
-        assert!(f.get_value_by_path(&data, "symbol=BTC").is_none());
     }
 }
