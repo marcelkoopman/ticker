@@ -15,7 +15,6 @@ pub struct Asset {
     pub price_path: String,
     pub unit: String,
     pub symbol: String,
-    pub poll_interval: String,
 }
 
 pub fn config_path() -> Result<PathBuf, Box<dyn Error>> {
@@ -33,12 +32,10 @@ pub fn config_path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.toml"))
 }
 
-/// Parse a config TOML string into a Config.
 pub fn parse_config(config_str: &str) -> Result<Config, Box<dyn Error>> {
     toml::from_str(config_str).map_err(|e| e.into())
 }
 
-/// Load config from an explicit path (useful for tests and custom locations).
 pub fn load_config_from(path: &Path) -> Result<Config, Box<dyn Error>> {
     let config_str =
         fs::read_to_string(path).map_err(|e| format!("Failed to read {:?}: {}", path, e))?;
@@ -64,7 +61,6 @@ name = "Bitcoin"
 url = "https://example.com/btc"
 price_path = "bitcoin.eur"
 unit = "EUR"
-poll_interval = "1m"
 symbol = "💰"
 
 [[assets]]
@@ -72,7 +68,6 @@ name = "Gold"
 url = "https://example.com/gold"
 price_path = "xau.price"
 unit = "EUR"
-poll_interval = "1h"
 symbol = "🥇"
 "#
     }
@@ -83,7 +78,6 @@ symbol = "🥇"
         assert_eq!(config.assets.len(), 2);
         assert_eq!(config.assets[0].name, "Bitcoin");
         assert_eq!(config.assets[0].price_path, "bitcoin.eur");
-        assert_eq!(config.assets[0].poll_interval, "1m");
         assert_eq!(config.assets[0].symbol, "💰");
         assert_eq!(config.assets[1].name, "Gold");
         assert_eq!(config.assets[1].unit, "EUR");
@@ -121,7 +115,6 @@ url = "https://example.com"
 
         let config = load_config_from(&path).expect("should load");
         assert_eq!(config.assets.len(), 2);
-        assert_eq!(config.assets[0].name, "Bitcoin");
 
         let _ = fs::remove_file(&path);
     }

@@ -1,6 +1,6 @@
 [package]
 name = "ticker"
-version = "0.1.23"
+version = "0.1.24"
 edition = "2024"
 
 [package.metadata.bundle]
@@ -30,6 +30,8 @@ chrono = "0.4"
 webbrowser = "1.2"
 dirs = "7.0"
 dhat = "0.3"
+# Minimal features: DataFrame + Display. Avoids polars-io/object_store → quick-xml 0.38 (RUSTSEC-2026-0194/0195).
+polars = { version = "0.51", default-features = false, features = ["fmt"] }
 
 [features]
 dhat-heap = []
