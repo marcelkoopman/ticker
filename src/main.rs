@@ -5,7 +5,6 @@ use std::path::PathBuf;
 mod config;
 mod menu_builder;
 mod menubar;
-mod poller;
 mod price_fetcher;
 mod price_history;
 
@@ -20,10 +19,8 @@ fn log_file_path() -> PathBuf {
 }
 
 fn log_message(message: &str) {
-    // ALTIJD naar stderr (zichtbaar in Terminal)
     eprintln!("{}", message);
 
-    // PLUS naar logfile
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
@@ -35,7 +32,6 @@ fn log_message(message: &str) {
 }
 
 fn main() {
-    // Clear old log
     let log_path = log_file_path();
     let _ = std::fs::remove_file(&log_path);
 
@@ -44,7 +40,6 @@ fn main() {
     log_message(&format!("Working dir: {:?}", std::env::current_dir()));
     log_message(&format!("Executable: {:?}", std::env::current_exe()));
 
-    // Start dhat profiler (only when feature enabled)
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
 
