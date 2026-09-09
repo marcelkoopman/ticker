@@ -30,7 +30,8 @@ chrono = "0.4"
 webbrowser = "1.2"
 dirs = "7.0"
 dhat = "0.3"
-polars = { version = "0.51", default-features = false, features = ["fmt", "dtype-full"] }
+# Minimal features: DataFrame + Display. Avoids polars-io/object_store → quick-xml 0.38 (RUSTSEC-2026-0194/0195).
+polars = { version = "0.51", default-features = false, features = ["fmt"] }
 
 [features]
 dhat-heap = []
