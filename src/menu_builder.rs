@@ -37,7 +37,7 @@ impl MenuBuilder {
     /// Non-clickable version label (matches Cargo.toml / release tag version).
     pub fn version_item() -> MenuItem {
         MenuItem::new(
-            &format!("Version {}", env!("CARGO_PKG_VERSION")),
+            format!("Version {}", env!("CARGO_PKG_VERSION")),
             false,
             None,
         )
@@ -197,7 +197,6 @@ mod tests {
 
     #[test]
     fn version_matches_cargo_pkg_version() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), env!("CARGO_PKG_VERSION"));
         assert!(!env!("CARGO_PKG_VERSION").is_empty());
     }
 }
