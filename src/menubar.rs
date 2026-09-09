@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
@@ -17,18 +17,18 @@ use winit::{
 
 use crate::config::load_config;
 use crate::menu_builder::MenuBuilder;
-use crate::poller::Poller;
 use crate::price_fetcher::PriceFetcher;
 use crate::price_history;
+
+/// Fixed poll interval for all assets.
+const POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 struct App {
     tray: Rc<RefCell<TrayIcon>>,
     fetcher: Option<PriceFetcher>,
-    poller: Option<Poller>,
     config: Option<crate::config::Config>,
-    /// Latest fetch of all assets as one DataFrame (symbol, name, price, unit).
+    /// Latest prices DataFrame (symbol, name, price, unit, prev_price, change, pct_change, direction).
     prices_df: Option<DataFrame>,
-    price_history: HashMap<String, f64>,
     links: HashMap<String, String>,
     next_check: SystemTime,
     normal_icon: Icon,
@@ -57,27 +57,13 @@ impl ApplicationHandler for App {
             match load_config() {
                 Ok(config) => {
                     eprintln!("✓ Config loaded successfully");
-                    self.config = Some(config.clone());
-                    self.poller = Some(Poller::new(&config.assets));
+                    self.config = Some(config);
                     self.config_error = None;
-
-                    match price_history::load_price_history() {
-                        Ok(history) => {
-                            for (name, snapshot) in history {
-                                self.price_history.insert(name, snapshot.value);
-                            }
-                            eprintln!("✓ Loaded price history from disk");
-                        }
-                        Err(_) => {
-                            eprintln!("ℹ️  No previous price history found");
-                        }
-                    }
 
                     if self.fetcher.is_some() {
                         eprintln!("💰 Fetching initial prices...");
-                        self.poll_due_assets(true);
-                        self.update_menu();
-                        self.update_next_check();
+                        self.poll_prices();
+                        self.schedule_next_poll();
                     }
                 }
                 Err(e) => {
@@ -96,8 +82,8 @@ impl ApplicationHandler for App {
                 "poll" => {
                     eprintln!("🔄 Manual poll triggered");
                     if self.config.is_some() {
-                        self.poll_due_assets(true);
-                        self.update_next_check();
+                        self.poll_prices();
+                        self.schedule_next_poll();
                     } else {
                         eprintln!("⚠️  Cannot poll: config not loaded");
                     }
@@ -111,9 +97,9 @@ impl ApplicationHandler for App {
         }
 
         if self.config.is_some() && SystemTime::now() >= self.next_check {
-            eprintln!("⏰ Auto-poll triggered");
-            self.poll_due_assets(false);
-            self.update_next_check();
+            eprintln!("⏰ Auto-poll triggered (every 5 minutes)");
+            self.poll_prices();
+            self.schedule_next_poll();
         }
 
         if let Ok(duration) = self.next_check.duration_since(SystemTime::now()) {
@@ -126,160 +112,92 @@ impl ApplicationHandler for App {
 }
 
 impl App {
-    fn poll_due_assets(&mut self, force: bool) {
+    fn poll_prices(&mut self) {
         let Some(config) = &self.config else { return };
         let Some(fetcher) = &self.fetcher else { return };
-        let Some(poller) = &mut self.poller else {
-            return;
+
+        let result = match &self.prices_df {
+            None => {
+                eprintln!("📊 First poll — constructing DataFrame");
+                fetcher.build_initial_dataframe(&config.assets)
+            }
+            Some(previous) => {
+                eprintln!("📊 Updating existing DataFrame");
+                fetcher.update_dataframe(previous, &config.assets)
+            }
         };
 
-        if !force {
-            let any_due = config.assets.iter().any(|a| poller.should_poll(&a.name));
-            if !any_due {
-                eprintln!("⏭️  No assets due yet");
-                return;
-            }
-        }
-
-        let df = match fetcher.fetch_all(&config.assets) {
+        let df = match result {
             Ok(df) => df,
             Err(e) => {
-                eprintln!("✗ Failed to build prices DataFrame: {}", e);
+                eprintln!("✗ Poll failed: {}", e);
                 return;
             }
         };
 
-        eprintln!("🔍 Checking {} assets for updates...", df.height());
-
-        let mut updated_count = 0;
-        let mut pending_history: Vec<(String, f64)> = Vec::new();
-
-        let name_col = df.column("name").ok();
-        let price_col = df.column("price").ok();
-
-        if let (Some(names), Some(prices)) = (name_col, price_col) {
-            let name_ca = names.str().ok();
-            let price_ca = prices.f64().ok();
-
-            if let (Some(name_ca), Some(price_ca)) = (name_ca, price_ca) {
-                for i in 0..df.height() {
-                    let Some(name) = name_ca.get(i) else { continue };
-                    let Some(new_price) = price_ca.get(i) else { continue };
-
-                    let old_price = self.price_history.get(name).copied();
-                    let price_changed = if let Some(old) = old_price {
-                        (old - new_price).abs() > 0.01
-                    } else {
-                        true
-                    };
-
-                    poller.mark_polled(name, &config.assets);
-
-                    if price_changed {
-                        updated_count += 1;
-                        pending_history.push((name.to_string(), new_price));
-                    }
-
-                    let price_str = if new_price.is_nan() {
-                        "?".to_string()
-                    } else {
-                        format!("{:.2}", new_price)
-                    };
-                    eprintln!("  ✓ {} → {}", name, price_str);
+        // Persist current prices for next app launch (optional baseline)
+        let mut history = HashMap::new();
+        if let (Ok(names), Ok(prices)) = (df.column("name"), df.column("price"))
+            && let (Ok(name_ca), Ok(price_ca)) = (names.str(), prices.f64())
+        {
+            for i in 0..df.height() {
+                if let (Some(name), Some(price)) = (name_ca.get(i), price_ca.get(i))
+                    && !price.is_nan()
+                {
+                    history.insert(name.to_string(), price);
                 }
             }
         }
-
-        eprintln!("📊 Update complete: {} updated", updated_count);
+        if !history.is_empty()
+            && let Err(e) = price_history::save_price_history(&history)
+        {
+            eprintln!("⚠️  Failed to save price history: {}", e);
+        }
 
         self.prices_df = Some(df);
-
-        if updated_count > 0 || force {
-            self.update_menu();
-        }
-
-        for (name, price) in pending_history {
-            self.price_history.insert(name, price);
-        }
-
-        if updated_count > 0 {
-            if let Err(e) = price_history::save_price_history(&self.price_history) {
-                eprintln!("⚠️  Failed to save price history: {}", e);
-            } else {
-                eprintln!("💾 Price history saved");
-            }
-        }
+        self.update_menu();
     }
 
-    fn update_next_check(&mut self) {
-        let Some(config) = &self.config else { return };
-        let Some(poller) = &self.poller else { return };
-
-        let mut earliest = SystemTime::now() + std::time::Duration::from_secs(3600);
-        let mut earliest_asset = "unknown".to_string();
-
-        for asset in &config.assets {
-            if let Some(duration) = poller.time_until_poll(&asset.name) {
-                let next = SystemTime::now() + duration;
-                if next < earliest {
-                    earliest = next;
-                    earliest_asset = asset.name.clone();
-                }
-            }
-        }
-
-        self.next_check = earliest;
-        let secs = self
-            .next_check
-            .duration_since(SystemTime::now())
-            .unwrap_or_default()
-            .as_secs();
-        eprintln!("⏱️  Next check: {}s ({})", secs, earliest_asset);
+    fn schedule_next_poll(&mut self) {
+        self.next_check = SystemTime::now() + POLL_INTERVAL;
+        eprintln!("⏱️  Next poll in {}s", POLL_INTERVAL.as_secs());
     }
 
     fn has_changes(&self) -> bool {
         let Some(df) = &self.prices_df else {
             return false;
         };
-        let Ok(names) = df.column("name") else {
+        let Ok(directions) = df.column("direction") else {
             return false;
         };
-        let Ok(prices) = df.column("price") else {
-            return false;
-        };
-        let Ok(name_ca) = names.str() else {
-            return false;
-        };
-        let Ok(price_ca) = prices.f64() else {
+        let Ok(dir_ca) = directions.str() else {
             return false;
         };
 
         for i in 0..df.height() {
-            let Some(name) = name_ca.get(i) else { continue };
-            let Some(price) = price_ca.get(i) else { continue };
-            if let Some(prev) = self.price_history.get(name)
-                && !price.is_nan()
-                && !prev.is_nan()
-                && (price - prev).abs() > 0.01
-            {
-                return true;
+            match dir_ca.get(i) {
+                Some("up") | Some("down") => return true,
+                _ => {}
             }
         }
         false
     }
 
     fn update_menu(&self) {
-        let df = self.prices_df.clone().unwrap_or_else(|| {
-            DataFrame::new(vec![
-                Series::new("symbol".into(), Vec::<String>::new()).into(),
-                Series::new("name".into(), Vec::<String>::new()).into(),
-                Series::new("price".into(), Vec::<f64>::new()).into(),
-                Series::new("unit".into(), Vec::<String>::new()).into(),
-            ])
-            .expect("empty dataframe")
-        });
+        let empty = DataFrame::new(vec![
+            Series::new("symbol".into(), Vec::<String>::new()).into(),
+            Series::new("name".into(), Vec::<String>::new()).into(),
+            Series::new("price".into(), Vec::<f64>::new()).into(),
+            Series::new("unit".into(), Vec::<String>::new()).into(),
+            Series::new("prev_price".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("change".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("pct_change".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("direction".into(), Vec::<String>::new()).into(),
+        ])
+        .expect("empty dataframe");
 
-        let menu = MenuBuilder::build(&df, &self.price_history);
+        let df = self.prices_df.clone().unwrap_or(empty);
+        let menu = MenuBuilder::build(&df);
 
         if let Ok(tray) = self.tray.try_borrow_mut() {
             tray.set_menu(Some(Box::new(menu)));
@@ -357,11 +275,11 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut links = HashMap::new();
     links.insert("bitcoin".to_string(), "https://bitcoin.nl".to_string());
+    links.insert("eth".to_string(), "https://bitcoin.nl".to_string());
     links.insert("gold".to_string(), "https://xaus.com".to_string());
-    links.insert(
-        "ttf_gas".to_string(),
-        "https://eurooilwatch.com".to_string(),
-    );
+    links.insert("gas".to_string(), "https://eurooilwatch.com".to_string());
+    links.insert("benzine".to_string(), "https://eurooilwatch.com".to_string());
+    links.insert("diesel".to_string(), "https://eurooilwatch.com".to_string());
 
     eprintln!("🎨 Creating initial menubar...");
     let initial_menu = Menu::new();
@@ -387,10 +305,8 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App {
         tray,
         fetcher: Some(fetcher),
-        poller: None,
         config: None,
         prices_df: None,
-        price_history: HashMap::new(),
         links,
         next_check: SystemTime::now(),
         normal_icon,
