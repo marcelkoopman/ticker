@@ -313,6 +313,7 @@ impl App {
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&MenuItem::with_id("poll", "🔄 Retry", true, None));
         let _ = menu.append(&PredefinedMenuItem::separator());
+        let _ = menu.append(&MenuBuilder::version_item());
         let _ = menu.append(&MenuItem::with_id("quit", " Quit", true, None));
 
         if let Ok(tray) = self.tray.try_borrow_mut() {
@@ -378,6 +379,7 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
     let _ = initial_menu.append(&PredefinedMenuItem::separator());
     let _ = initial_menu.append(&MenuItem::with_id("poll", "🔄 Retry", true, None));
     let _ = initial_menu.append(&PredefinedMenuItem::separator());
+    let _ = initial_menu.append(&MenuBuilder::version_item());
     let _ = initial_menu.append(&MenuItem::with_id("quit", " Quit", true, None));
 
     let tray_icon = TrayIconBuilder::new()
