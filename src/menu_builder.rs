@@ -1,6 +1,9 @@
 use polars::prelude::*;
 use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
 
+/// Keep in sync with the `polars` version in Cargo.toml.
+const POLARS_VERSION: &str = "0.51";
+
 pub struct MenuBuilder;
 
 impl MenuBuilder {
@@ -82,7 +85,11 @@ impl MenuBuilder {
 
     pub fn version_item() -> MenuItem {
         MenuItem::new(
-            format!("Version {}", env!("CARGO_PKG_VERSION")),
+            format!(
+                "Version {} · Polars {}",
+                env!("CARGO_PKG_VERSION"),
+                POLARS_VERSION
+            ),
             false,
             None,
         )
@@ -134,8 +141,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_matches_cargo_pkg_version() {
+    fn version_includes_app_and_polars() {
         assert!(!env!("CARGO_PKG_VERSION").is_empty());
+        assert!(!POLARS_VERSION.is_empty());
     }
 
     #[test]
