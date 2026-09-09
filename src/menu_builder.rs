@@ -27,10 +27,20 @@ impl MenuBuilder {
         let _ = menu.append(&poll_item);
 
         let _ = menu.append(&PredefinedMenuItem::separator());
+        let _ = menu.append(&Self::version_item());
         let quit_item = MenuItem::with_id("quit", " Quit", true, None);
         let _ = menu.append(&quit_item);
 
         menu
+    }
+
+    /// Non-clickable version label (matches Cargo.toml / release tag version).
+    pub fn version_item() -> MenuItem {
+        MenuItem::new(
+            format!("Version {}", env!("CARGO_PKG_VERSION")),
+            false,
+            None,
+        )
     }
 
     fn item_id(name: &str) -> String {
@@ -183,5 +193,10 @@ mod tests {
         assert!(s.contains("🔴"));
         assert!(s.contains("€"));
         assert!(s.contains("-10.00%"));
+    }
+
+    #[test]
+    fn version_matches_cargo_pkg_version() {
+        assert!(!env!("CARGO_PKG_VERSION").is_empty());
     }
 }
