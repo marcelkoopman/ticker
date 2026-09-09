@@ -128,7 +128,6 @@ impl App {
             return;
         };
 
-        // Skip work if nothing is due (unless forced)
         if !force {
             let any_due = config.assets.iter().any(|a| poller.should_poll(&a.name));
             if !any_due {
@@ -137,7 +136,6 @@ impl App {
             }
         }
 
-        // Fetch ALL assets in one pass → one DataFrame
         let df = match fetcher.fetch_all(&config.assets) {
             Ok(df) => df,
             Err(e) => {
@@ -149,6 +147,8 @@ impl App {
         eprintln!("🔍 Checking {} assets for updates...", df.height());
 
         let mut updated_count = 0;
+        let mut pending_history: Vec<(String, f64)> = Vec::new();
+
         let name_col = df.column("name").ok();
         let price_col = df.column("price").ok();
 
@@ -172,7 +172,7 @@ impl App {
 
                     if price_changed {
                         updated_count += 1;
-                        self.price_history.insert(name.to_string(), new_price);
+                        pending_history.push((name.to_string(), new_price));
                     }
 
                     let price_str = if new_price.is_nan() {
@@ -189,8 +189,13 @@ impl App {
 
         self.prices_df = Some(df);
 
+        // Menu/icon first while history still holds previous values
         if updated_count > 0 || force {
             self.update_menu();
+        }
+
+        for (name, price) in pending_history {
+            self.price_history.insert(name, price);
         }
 
         if updated_count > 0 {
@@ -251,10 +256,9 @@ impl App {
             if let Some(prev) = self.price_history.get(name)
                 && !price.is_nan()
                 && !prev.is_nan()
+                && (price - prev).abs() > 0.01
             {
-                if (price - prev).abs() > 0.01 {
-                    return true;
-                }
+                return true;
             }
         }
         false
@@ -291,11 +295,7 @@ impl App {
         let menu = Menu::new();
 
         if let Some(error) = &self.config_error {
-            let _ = menu.append(&MenuItem::new(
-                format!("❌ {}", error),
-                false,
-                None,
-            ));
+            let _ = menu.append(&MenuItem::new(format!("❌ {}", error), false, None));
         } else {
             let _ = menu.append(&MenuItem::new("⏳ Loading config...", false, None));
         }
