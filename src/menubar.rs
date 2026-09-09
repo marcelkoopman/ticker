@@ -278,7 +278,10 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
     links.insert("eth".to_string(), "https://bitcoin.nl".to_string());
     links.insert("gold".to_string(), "https://xaus.com".to_string());
     links.insert("gas".to_string(), "https://eurooilwatch.com".to_string());
-    links.insert("benzine".to_string(), "https://eurooilwatch.com".to_string());
+    links.insert(
+        "benzine".to_string(),
+        "https://eurooilwatch.com".to_string(),
+    );
     links.insert("diesel".to_string(), "https://eurooilwatch.com".to_string());
 
     eprintln!("🎨 Creating initial menubar...");
