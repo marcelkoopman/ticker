@@ -29,6 +29,7 @@ struct App {
     /// Latest fetch of all assets as one DataFrame (symbol, name, price, unit).
     prices_df: Option<DataFrame>,
     price_history: HashMap<String, f64>,
+    links: HashMap<String, String>,
     next_check: SystemTime,
     normal_icon: Icon,
     alert_icon: Icon,
@@ -101,7 +102,11 @@ impl ApplicationHandler for App {
                         eprintln!("⚠️  Cannot poll: config not loaded");
                     }
                 }
-                _ => {}
+                id => {
+                    if let Some(url) = self.links.get(id) {
+                        let _ = webbrowser::open(url);
+                    }
+                }
             }
         }
 
@@ -189,7 +194,6 @@ impl App {
 
         self.prices_df = Some(df);
 
-        // Menu/icon first while history still holds previous values
         if updated_count > 0 || force {
             self.update_menu();
         }
@@ -275,7 +279,7 @@ impl App {
             .expect("empty dataframe")
         });
 
-        let menu = MenuBuilder::build(&df);
+        let menu = MenuBuilder::build(&df, &self.price_history);
 
         if let Ok(tray) = self.tray.try_borrow_mut() {
             tray.set_menu(Some(Box::new(menu)));
@@ -351,6 +355,14 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
     let normal_icon = load_icon("normal.png")?;
     let alert_icon = load_icon("update.png")?;
 
+    let mut links = HashMap::new();
+    links.insert("bitcoin".to_string(), "https://bitcoin.nl".to_string());
+    links.insert("gold".to_string(), "https://xaus.com".to_string());
+    links.insert(
+        "ttf_gas".to_string(),
+        "https://eurooilwatch.com".to_string(),
+    );
+
     eprintln!("🎨 Creating initial menubar...");
     let initial_menu = Menu::new();
     let _ = initial_menu.append(&MenuItem::new("⏳ Loading config...", false, None));
@@ -379,6 +391,7 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
         config: None,
         prices_df: None,
         price_history: HashMap::new(),
+        links,
         next_check: SystemTime::now(),
         normal_icon,
         alert_icon,
