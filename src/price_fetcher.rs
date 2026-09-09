@@ -2,6 +2,11 @@ use crate::config::Asset;
 use reqwest::blocking::Client;
 use serde_json::Value;
 use std::error::Error;
+use std::thread;
+use std::time::Duration;
+
+const MAX_FETCH_ATTEMPTS: u32 = 3;
+const RETRY_DELAY: Duration = Duration::from_millis(500);
 
 pub struct PriceFetcher {
     client: Client,
@@ -15,18 +20,45 @@ impl PriceFetcher {
         Ok(PriceFetcher { client })
     }
 
+    /// Fetch a price, retrying up to 3 times when the result is NaN (network/HTTP/parse failure).
     pub fn fetch_price(&self, asset: &Asset) -> f64 {
-        eprintln!("🔍 Fetching {} from {}", asset.name, asset.url);
+        for attempt in 1..=MAX_FETCH_ATTEMPTS {
+            let price = self.fetch_price_once(asset, attempt);
+            if !price.is_nan() {
+                return price;
+            }
+
+            if attempt < MAX_FETCH_ATTEMPTS {
+                eprintln!(
+                    "⚠️  {} failed (attempt {}/{}), retrying in {:?}...",
+                    asset.name, attempt, MAX_FETCH_ATTEMPTS, RETRY_DELAY
+                );
+                thread::sleep(RETRY_DELAY);
+            }
+        }
+
+        eprintln!(
+            "✗ Giving up on {} after {} attempts",
+            asset.name, MAX_FETCH_ATTEMPTS
+        );
+        f64::NAN
+    }
+
+    fn fetch_price_once(&self, asset: &Asset, attempt: u32) -> f64 {
+        eprintln!(
+            "🔍 Fetching {} from {} (attempt {}/{})",
+            asset.name, asset.url, attempt, MAX_FETCH_ATTEMPTS
+        );
         match self.client.get(&asset.url).send() {
             Ok(response) => match response.error_for_status() {
                 Ok(resp) => match resp.json::<Value>() {
                     Ok(json) => {
+                        let json_str = serde_json::to_string(&json).unwrap_or_default();
+                        let preview_len = std::cmp::min(500, json_str.len());
                         eprintln!(
-                            "📦 Raw JSON (first 500 chars): {}",
-                            &serde_json::to_string(&json).unwrap_or_default()[..std::cmp::min(
-                                500,
-                                serde_json::to_string(&json).unwrap_or_default().len()
-                            )]
+                            "📦 Raw JSON (first {} chars): {}",
+                            preview_len,
+                            &json_str[..preview_len]
                         );
 
                         if let Some(price_value) = self.get_value_by_path(&json, &asset.price_path)
@@ -128,6 +160,11 @@ mod tests {
 
     fn fetcher() -> PriceFetcher {
         PriceFetcher::new().expect("client should build")
+    }
+
+    #[test]
+    fn max_fetch_attempts_is_three() {
+        assert_eq!(MAX_FETCH_ATTEMPTS, 3);
     }
 
     #[test]
