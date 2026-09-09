@@ -1,4 +1,5 @@
 use image::ImageReader;
+use polars::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -8,7 +9,6 @@ use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
-// Used in match statement
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -26,8 +26,8 @@ struct App {
     fetcher: Option<PriceFetcher>,
     poller: Option<Poller>,
     config: Option<crate::config::Config>,
-    links: HashMap<String, String>,
-    prices: Vec<(String, f64, String)>,
+    /// Latest fetch of all assets as one DataFrame (symbol, name, price, unit).
+    prices_df: Option<DataFrame>,
     price_history: HashMap<String, f64>,
     next_check: SystemTime,
     normal_icon: Icon,
@@ -48,7 +48,6 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // ===== FASE 1: Menubar tonen en config laden =====
         if !self.config_loaded {
             self.config_loaded = true;
 
@@ -61,7 +60,6 @@ impl ApplicationHandler for App {
                     self.poller = Some(Poller::new(&config.assets));
                     self.config_error = None;
 
-                    // Load previous session's price history
                     match price_history::load_price_history() {
                         Ok(history) => {
                             for (name, snapshot) in history {
@@ -74,7 +72,6 @@ impl ApplicationHandler for App {
                         }
                     }
 
-                    // Fetch prices immediately after config loads
                     if self.fetcher.is_some() {
                         eprintln!("💰 Fetching initial prices...");
                         self.poll_due_assets(true);
@@ -92,9 +89,6 @@ impl ApplicationHandler for App {
             return;
         }
 
-        // ===== FASE 2: Normale polling en menu-updates =====
-
-        // Handle menu events
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             match event.id.0.as_str() {
                 "quit" => event_loop.exit(),
@@ -107,22 +101,16 @@ impl ApplicationHandler for App {
                         eprintln!("⚠️  Cannot poll: config not loaded");
                     }
                 }
-                id => {
-                    if let Some(url) = self.links.get(id) {
-                        let _ = webbrowser::open(url);
-                    }
-                }
+                _ => {}
             }
         }
 
-        // Auto-poll when due
         if self.config.is_some() && SystemTime::now() >= self.next_check {
             eprintln!("⏰ Auto-poll triggered");
             self.poll_due_assets(false);
             self.update_next_check();
         }
 
-        // Sleep until next_check
         if let Ok(duration) = self.next_check.duration_since(SystemTime::now()) {
             event_loop
                 .set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + duration));
@@ -140,76 +128,71 @@ impl App {
             return;
         };
 
-        let new_prices = fetcher.fetch_all(&config.assets);
-        eprintln!("🔍 Checking {} assets for updates...", new_prices.len());
+        // Skip work if nothing is due (unless forced)
+        if !force {
+            let any_due = config.assets.iter().any(|a| poller.should_poll(&a.name));
+            if !any_due {
+                eprintln!("⏭️  No assets due yet");
+                return;
+            }
+        }
+
+        // Fetch ALL assets in one pass → one DataFrame
+        let df = match fetcher.fetch_all(&config.assets) {
+            Ok(df) => df,
+            Err(e) => {
+                eprintln!("✗ Failed to build prices DataFrame: {}", e);
+                return;
+            }
+        };
+
+        eprintln!("🔍 Checking {} assets for updates...", df.height());
 
         let mut updated_count = 0;
-        let mut updates: Vec<(String, f64)> = Vec::new();
+        let name_col = df.column("name").ok();
+        let price_col = df.column("price").ok();
 
-        for (new_name, new_price, new_unit) in &new_prices {
-            if !force && !poller.should_poll(new_name) {
-                eprintln!("  ⏭️  {} (not due yet)", new_name);
-                continue;
-            }
+        if let (Some(names), Some(prices)) = (name_col, price_col) {
+            let name_ca = names.str().ok();
+            let price_ca = prices.f64().ok();
 
-            let old_price = self.price_history.get(new_name).copied();
+            if let (Some(name_ca), Some(price_ca)) = (name_ca, price_ca) {
+                for i in 0..df.height() {
+                    let Some(name) = name_ca.get(i) else { continue };
+                    let Some(new_price) = price_ca.get(i) else { continue };
 
-            let price_str = if new_price.is_nan() {
-                "?".to_string()
-            } else {
-                format!("{:.2}", new_price)
-            };
+                    let old_price = self.price_history.get(name).copied();
+                    let price_changed = if let Some(old) = old_price {
+                        (old - new_price).abs() > 0.01
+                    } else {
+                        true
+                    };
 
-            let price_changed = if let Some(old) = old_price {
-                (old - new_price).abs() > 0.01
-            } else {
-                true // First time seeing this price
-            };
+                    poller.mark_polled(name, &config.assets);
 
-            let change_note = if let Some(old) = old_price {
-                if (old - new_price).abs() < 0.01 {
-                    " (no change)".to_string()
-                } else {
-                    let diff = new_price - old;
-                    let sign = if diff > 0.0 { "+" } else { "" };
-                    format!(" ({}{:.2})", sign, diff)
+                    if price_changed {
+                        updated_count += 1;
+                        self.price_history.insert(name.to_string(), new_price);
+                    }
+
+                    let price_str = if new_price.is_nan() {
+                        "?".to_string()
+                    } else {
+                        format!("{:.2}", new_price)
+                    };
+                    eprintln!("  ✓ {} → {}", name, price_str);
                 }
-            } else {
-                "".to_string()
-            };
-
-            if let Some(pos) = self.prices.iter().position(|(name, _, _)| name == new_name) {
-                self.prices[pos] = (new_name.clone(), *new_price, new_unit.clone());
-            } else {
-                self.prices
-                    .push((new_name.clone(), *new_price, new_unit.clone()));
-            }
-
-            poller.mark_polled(new_name, &config.assets);
-            eprintln!(
-                "  ✓ {} → {} {}{}",
-                new_name, price_str, new_unit, change_note
-            );
-
-            if price_changed {
-                // Only add if price actually changed
-                updates.push((new_name.clone(), *new_price));
-                updated_count += 1;
             }
         }
 
         eprintln!("📊 Update complete: {} updated", updated_count);
 
-        // Only update menu if prices actually changed
-        if !updates.is_empty() {
+        self.prices_df = Some(df);
+
+        if updated_count > 0 || force {
             self.update_menu();
         }
 
-        for (name, price) in updates {
-            self.price_history.insert(name, price);
-        }
-
-        // Persist baseline for the next session (change indicators across restarts)
         if updated_count > 0 {
             if let Err(e) = price_history::save_price_history(&self.price_history) {
                 eprintln!("⚠️  Failed to save price history: {}", e);
@@ -246,13 +229,30 @@ impl App {
     }
 
     fn has_changes(&self) -> bool {
-        for (name, price, _unit) in &self.prices {
+        let Some(df) = &self.prices_df else {
+            return false;
+        };
+        let Ok(names) = df.column("name") else {
+            return false;
+        };
+        let Ok(prices) = df.column("price") else {
+            return false;
+        };
+        let Ok(name_ca) = names.str() else {
+            return false;
+        };
+        let Ok(price_ca) = prices.f64() else {
+            return false;
+        };
+
+        for i in 0..df.height() {
+            let Some(name) = name_ca.get(i) else { continue };
+            let Some(price) = price_ca.get(i) else { continue };
             if let Some(prev) = self.price_history.get(name)
                 && !price.is_nan()
                 && !prev.is_nan()
             {
-                let diff = price - prev;
-                if diff.abs() > 0.01 {
+                if (price - prev).abs() > 0.01 {
                     return true;
                 }
             }
@@ -261,27 +261,17 @@ impl App {
     }
 
     fn update_menu(&self) {
-        let Some(config) = &self.config else { return };
-        let Some(poller) = &self.poller else { return };
+        let df = self.prices_df.clone().unwrap_or_else(|| {
+            DataFrame::new(vec![
+                Series::new("symbol".into(), Vec::<String>::new()).into(),
+                Series::new("name".into(), Vec::<String>::new()).into(),
+                Series::new("price".into(), Vec::<f64>::new()).into(),
+                Series::new("unit".into(), Vec::<String>::new()).into(),
+            ])
+            .expect("empty dataframe")
+        });
 
-        let prices_with_history: Vec<(String, f64, String, Option<f64>, String)> = self
-            .prices
-            .iter()
-            .map(|(name, price, unit)| {
-                let prev = self.price_history.get(name).copied();
-
-                let symbol = config
-                    .assets
-                    .iter()
-                    .find(|a| a.name == *name)
-                    .map(|a| a.symbol.clone())
-                    .unwrap_or_else(|| ".".to_string());
-
-                (name.clone(), *price, unit.clone(), prev, symbol)
-            })
-            .collect();
-
-        let menu = MenuBuilder::build(&prices_with_history, poller);
+        let menu = MenuBuilder::build(&df);
 
         if let Ok(tray) = self.tray.try_borrow_mut() {
             tray.set_menu(Some(Box::new(menu)));
@@ -302,7 +292,7 @@ impl App {
 
         if let Some(error) = &self.config_error {
             let _ = menu.append(&MenuItem::new(
-                format!("❌ {}", error).as_str(),
+                format!("❌ {}", error),
                 false,
                 None,
             ));
@@ -323,8 +313,6 @@ impl App {
 }
 
 fn bundle_assets_dir() -> PathBuf {
-    // If running from a macOS .app bundle, we want:
-    //   MyApp.app/Contents/Resources/assets
     if let Ok(exe_path) = std::env::current_exe()
         && let Some(app_dir) = exe_path.ancestors().find(|p| {
             p.file_name()
@@ -339,7 +327,6 @@ fn bundle_assets_dir() -> PathBuf {
         }
     }
 
-    // Fallback to dev path (when running via `cargo run`)
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
 }
 
@@ -364,15 +351,6 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
     let normal_icon = load_icon("normal.png")?;
     let alert_icon = load_icon("update.png")?;
 
-    let mut links = HashMap::new();
-    links.insert("bitcoin".to_string(), "https://bitcoin.nl".to_string());
-    links.insert("gold".to_string(), "https://xaus.com".to_string());
-    links.insert(
-        "ttf_gas".to_string(),
-        "https://eurooilwatch.com".to_string(),
-    );
-
-    // Initial menu: loading state (show menu immediately)
     eprintln!("🎨 Creating initial menubar...");
     let initial_menu = Menu::new();
     let _ = initial_menu.append(&MenuItem::new("⏳ Loading config...", false, None));
@@ -392,7 +370,6 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("✓ Menubar is visible");
 
     let tray = Rc::new(RefCell::new(tray_icon));
-
     let event_loop = EventLoop::new()?;
 
     let mut app = App {
@@ -400,8 +377,7 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
         fetcher: Some(fetcher),
         poller: None,
         config: None,
-        links,
-        prices: Vec::new(),
+        prices_df: None,
         price_history: HashMap::new(),
         next_check: SystemTime::now(),
         normal_icon,
