@@ -2,7 +2,7 @@ use polars::prelude::*;
 use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
 
 /// Keep in sync with the `polars` version in Cargo.toml.
-const POLARS_VERSION: &str = "0.51";
+const POLARS_VERSION: &str = "0.55.2";
 
 pub struct MenuBuilder;
 
