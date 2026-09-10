@@ -184,7 +184,7 @@ impl App {
     }
 
     fn update_menu(&self) {
-        let empty = DataFrame::new(vec![
+        let empty = DataFrame::new_infer_height(vec![
             Series::new("symbol".into(), Vec::<String>::new()).into(),
             Series::new("name".into(), Vec::<String>::new()).into(),
             Series::new("price".into(), Vec::<f64>::new()).into(),

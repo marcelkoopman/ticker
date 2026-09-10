@@ -105,7 +105,7 @@ impl PriceFetcher {
             units.push(asset.unit.clone());
         }
 
-        DataFrame::new(vec![
+        DataFrame::new_infer_height(vec![
             Series::new("symbol".into(), symbols).into(),
             Series::new("name".into(), names).into(),
             Series::new("price".into(), prices).into(),
