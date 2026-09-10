@@ -120,10 +120,10 @@ impl PriceFetcher {
         let n = base.height();
         let mut df = base;
 
-        df.with_column(Series::new("prev_price".into(), vec![None::<f64>; n]))?;
-        df.with_column(Series::new("change".into(), vec![None::<f64>; n]))?;
-        df.with_column(Series::new("pct_change".into(), vec![None::<f64>; n]))?;
-        df.with_column(Series::new("direction".into(), vec![String::new(); n]))?;
+        df.with_column(Series::new("prev_price".into(), vec![None::<f64>; n]).into())?;
+        df.with_column(Series::new("change".into(), vec![None::<f64>; n]).into())?;
+        df.with_column(Series::new("pct_change".into(), vec![None::<f64>; n]).into())?;
+        df.with_column(Series::new("direction".into(), vec![String::new(); n]).into())?;
 
         eprintln!("📊 Initial DataFrame:\n{df}");
         Ok(df)
@@ -191,10 +191,10 @@ impl PriceFetcher {
         }
 
         let mut df = fresh;
-        df.with_column(Series::new("prev_price".into(), prev_price_col))?;
-        df.with_column(Series::new("change".into(), change_col))?;
-        df.with_column(Series::new("pct_change".into(), pct_col))?;
-        df.with_column(Series::new("direction".into(), direction_col))?;
+        df.with_column(Series::new("prev_price".into(), prev_price_col).into())?;
+        df.with_column(Series::new("change".into(), change_col).into())?;
+        df.with_column(Series::new("pct_change".into(), pct_col).into())?;
+        df.with_column(Series::new("direction".into(), direction_col).into())?;
 
         eprintln!("📊 Updated DataFrame:\n{df}");
         Ok(df)
