@@ -7,6 +7,7 @@ mod menu_builder;
 mod menubar;
 mod price_fetcher;
 mod price_history;
+mod price_watch;
 
 // Add dhat allocator (only when feature enabled)
 #[cfg(feature = "dhat-heap")]
