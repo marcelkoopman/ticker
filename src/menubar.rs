@@ -148,33 +148,31 @@ impl App {
         let mut opens = HashMap::new();
         if let (Ok(names), Ok(prices), Ok(day_open_col)) =
             (df.column("name"), df.column("price"), df.column("day_open"))
-        {
-            if let (Ok(name_ca), Ok(price_ca), Ok(open_ca)) =
+            && let (Ok(name_ca), Ok(price_ca), Ok(open_ca)) =
                 (names.str(), prices.f64(), day_open_col.f64())
-            {
-                for i in 0..df.height() {
-                    if let (Some(name), Some(price)) = (name_ca.get(i), price_ca.get(i)) {
-                        if !price.is_nan() {
-                            history.insert(name.to_string(), price);
-                        }
-                    }
-                    if let (Some(name), Some(open)) = (name_ca.get(i), open_ca.get(i)) {
-                        if !open.is_nan() {
-                            opens.insert(name.to_string(), open);
-                        }
-                    }
+        {
+            for i in 0..df.height() {
+                if let (Some(name), Some(price)) = (name_ca.get(i), price_ca.get(i))
+                    && !price.is_nan()
+                {
+                    history.insert(name.to_string(), price);
+                }
+                if let (Some(name), Some(open)) = (name_ca.get(i), open_ca.get(i))
+                    && !open.is_nan()
+                {
+                    opens.insert(name.to_string(), open);
                 }
             }
         }
-        if !history.is_empty() {
-            if let Err(e) = price_history::save_price_history(&history) {
-                eprintln!("⚠️  Failed to save price history: {}", e);
-            }
+        if !history.is_empty()
+            && let Err(e) = price_history::save_price_history(&history)
+        {
+            eprintln!("⚠️  Failed to save price history: {}", e);
         }
-        if !opens.is_empty() {
-            if let Err(e) = price_history::save_day_opens(&opens) {
-                eprintln!("⚠️  Failed to save day opens: {}", e);
-            }
+        if !opens.is_empty()
+            && let Err(e) = price_history::save_day_opens(&opens)
+        {
+            eprintln!("⚠️  Failed to save day opens: {}", e);
         }
 
         self.prices_df = Some(df);
@@ -262,17 +260,17 @@ impl App {
 }
 
 fn bundle_assets_dir() -> PathBuf {
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(app_dir) = exe_path.ancestors().find(|p| {
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(app_dir) = exe_path.ancestors().find(|p| {
             p.file_name()
                 .and_then(|name| name.to_str())
                 .map(|name| name.ends_with(".app"))
                 .unwrap_or(false)
-        }) {
-            let assets = app_dir.join("Contents/Resources/assets");
-            if assets.exists() {
-                return assets;
-            }
+        })
+    {
+        let assets = app_dir.join("Contents/Resources/assets");
+        if assets.exists() {
+            return assets;
         }
     }
 
