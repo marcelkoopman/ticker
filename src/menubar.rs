@@ -19,6 +19,8 @@ use crate::config::load_config;
 use crate::menu_builder::MenuBuilder;
 use crate::price_fetcher::PriceFetcher;
 use crate::price_history;
+use crate::price_watch::{self, WatchList, WatchDirection};
+use crate::watch_ui::{WatchUIBuilder, send_macos_notification};
 
 /// Fixed poll interval for all assets.
 const POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -35,6 +37,8 @@ struct App {
     alert_icon: Icon,
     config_loaded: bool,
     config_error: Option<String>,
+    /// Price watch list and state
+    watch_list: WatchList,
 }
 
 impl ApplicationHandler for App {
@@ -59,6 +63,17 @@ impl ApplicationHandler for App {
                     eprintln!("✓ Config loaded successfully");
                     self.config = Some(config);
                     self.config_error = None;
+
+                    // Load price watches
+                    match price_watch::load_watch_list() {
+                        Ok(watches) => {
+                            eprintln!("📊 Loaded {} price watches", watches.watches.len());
+                            self.watch_list = watches;
+                        }
+                        Err(e) => {
+                            eprintln!("⚠️  Failed to load watches: {}", e);
+                        }
+                    }
 
                     if self.fetcher.is_some() {
                         eprintln!("💰 Fetching initial prices...");
@@ -90,6 +105,14 @@ impl ApplicationHandler for App {
                 }
                 "copy" => {
                     self.copy_prices_to_clipboard();
+                }
+                "add_watch" => {
+                    eprintln!("➕ Add watch triggered");
+                    self.show_add_watch_prompt();
+                }
+                "manage_watches" => {
+                    eprintln!("⚙️  Manage watches triggered");
+                    self.show_manage_watches_menu();
                 }
                 id => {
                     if let Some(url) = self.links.get(id) {
@@ -141,6 +164,17 @@ impl App {
         }
     }
 
+    fn show_add_watch_prompt(&self) {
+        eprintln!("📝 TODO: Show dialog to add watch");
+        // In a real implementation, this would open a native dialog
+        // For now, we log it and users can add watches programmatically
+    }
+
+    fn show_manage_watches_menu(&self) {
+        eprintln!("📋 TODO: Show manage watches menu");
+        // In a real implementation, this would show watch management UI
+    }
+
     fn poll_prices(&mut self) {
         let Some(config) = &self.config else {
             return;
@@ -170,6 +204,9 @@ impl App {
                 return;
             }
         };
+
+        // Check price watches
+        self.check_and_trigger_watches(&df);
 
         // Persist last-poll prices (legacy baseline).
         let mut history = HashMap::new();
@@ -208,6 +245,40 @@ impl App {
         self.update_menu();
     }
 
+    fn check_and_trigger_watches(&mut self, df: &DataFrame) {
+        let Ok(names) = df.column("name") else {
+            return;
+        };
+        let Ok(prices) = df.column("price") else {
+            return;
+        };
+        let Ok(name_ca) = names.str() else {
+            return;
+        };
+        let Ok(price_ca) = prices.f64() else {
+            return;
+        };
+
+        for i in 0..df.height() {
+            if let (Some(asset_name), Some(current_price)) = (name_ca.get(i), price_ca.get(i))
+                && !current_price.is_nan()
+            {
+                let triggered = self.watch_list.check_price(asset_name, current_price);
+
+                for watch in triggered {
+                    let notification = WatchUIBuilder::format_trigger_notification(&watch, current_price);
+                    eprintln!("🔔 Watch triggered: {}", notification);
+                    send_macos_notification(&watch.asset_name, &notification);
+                }
+            }
+        }
+
+        // Save updated watch list
+        if let Err(e) = price_watch::save_watch_list(&self.watch_list) {
+            eprintln!("⚠️  Failed to save watch list: {}", e);
+        }
+    }
+
     fn schedule_next_poll(&mut self) {
         self.next_check = SystemTime::now() + POLL_INTERVAL;
         eprintln!("⏱️  Next poll in {}s", POLL_INTERVAL.as_secs());
@@ -230,7 +301,9 @@ impl App {
                 _ => {}
             }
         }
-        false
+
+        // Also check if any watches are triggered
+        self.watch_list.watches.iter().any(|w| w.triggered)
     }
 
     fn update_menu(&self) {
@@ -252,7 +325,29 @@ impl App {
         .expect("empty dataframe");
 
         let df = self.prices_df.clone().unwrap_or(empty);
-        let menu = MenuBuilder::build(&df);
+        let mut menu = MenuBuilder::build(&df);
+
+        // Add watches section if there are any
+        if !self.watch_list.watches.is_empty() {
+            let _ = menu.append(&PredefinedMenuItem::separator());
+            let _ = menu.append(&MenuItem::new(
+                &WatchUIBuilder::watch_status_indicator(&self.watch_list),
+                false,
+                None,
+            ));
+            let _ = menu.append(&MenuItem::with_id(
+                "add_watch",
+                "➕ Add Price Watch",
+                true,
+                None,
+            ));
+            let _ = menu.append(&MenuItem::with_id(
+                "manage_watches",
+                "⚙️  Manage Watches",
+                true,
+                None,
+            ));
+        }
 
         if let Ok(tray) = self.tray.try_borrow_mut() {
             tray.set_menu(Some(Box::new(menu)));
@@ -371,6 +466,7 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
         alert_icon,
         config_loaded: false,
         config_error: None,
+        watch_list: WatchList::new(),
     };
 
     eprintln!("🚀 Starting event loop...");
