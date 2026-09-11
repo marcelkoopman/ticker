@@ -82,3 +82,7 @@ echo -e "${GREEN}✓ Pushed to GitHub${NC}"
 
 echo -e "${GREEN}✅ Release v$NEW_VERSION created successfully!${NC}"
 echo -e "${YELLOW}GitHub Actions will now build and release the DMG.${NC}"
+
+git add Cargo.lock
+git commit -m "Update cargo lock with version $NEW_VERSION"
+git push
