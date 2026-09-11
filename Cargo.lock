@@ -4149,7 +4149,7 @@ checksum = "3bf63baf9f5039dadc247375c29eb13706706cfde997d0330d05aa63a77d8820"
 
 [[package]]
 name = "ticker"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "arboard",
  "chrono",
