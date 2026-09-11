@@ -88,6 +88,9 @@ impl ApplicationHandler for App {
                         eprintln!("⚠️  Cannot poll: config not loaded");
                     }
                 }
+                "copy" => {
+                    self.copy_prices_to_clipboard();
+                }
                 id => {
                     if let Some(url) = self.links.get(id) {
                         let _ = webbrowser::open(url);
@@ -112,6 +115,32 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    fn copy_prices_to_clipboard(&self) {
+        let empty = DataFrame::new_infer_height(vec![
+            Series::new("symbol".into(), Vec::<String>::new()).into(),
+            Series::new("name".into(), Vec::<String>::new()).into(),
+            Series::new("price".into(), Vec::<f64>::new()).into(),
+            Series::new("unit".into(), Vec::<String>::new()).into(),
+            Series::new("unit_hint".into(), Vec::<String>::new()).into(),
+            Series::new("day_open".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("change_day".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("pct_day".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("direction_day".into(), Vec::<String>::new()).into(),
+        ])
+        .expect("empty dataframe");
+
+        let df = self.prices_df.as_ref().unwrap_or(&empty);
+        let tsv = MenuBuilder::dataframe_as_tsv(df);
+
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => match clipboard.set_text(tsv) {
+                Ok(()) => eprintln!("📋 Copied {} price row(s) to clipboard (TSV)", df.height()),
+                Err(e) => eprintln!("✗ Failed to set clipboard text: {}", e),
+            },
+            Err(e) => eprintln!("✗ Failed to open clipboard: {}", e),
+        }
+    }
+
     fn poll_prices(&mut self) {
         let Some(config) = &self.config else {
             return;
@@ -210,6 +239,7 @@ impl App {
             Series::new("name".into(), Vec::<String>::new()).into(),
             Series::new("price".into(), Vec::<f64>::new()).into(),
             Series::new("unit".into(), Vec::<String>::new()).into(),
+            Series::new("unit_hint".into(), Vec::<String>::new()).into(),
             Series::new("prev_price".into(), Vec::<Option<f64>>::new()).into(),
             Series::new("change".into(), Vec::<Option<f64>>::new()).into(),
             Series::new("pct_change".into(), Vec::<Option<f64>>::new()).into(),

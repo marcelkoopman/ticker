@@ -86,6 +86,8 @@ impl MenuBuilder {
         let _ = menu.append(&PredefinedMenuItem::separator());
         let poll_item = MenuItem::with_id("poll", "🔄  Poll now", true, None);
         let _ = menu.append(&poll_item);
+        let copy_item = MenuItem::with_id("copy", "📋  Copy to clipboard", true, None);
+        let _ = menu.append(&copy_item);
 
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&Self::version_item());
@@ -93,6 +95,59 @@ impl MenuBuilder {
         let _ = menu.append(&quit_item);
 
         menu
+    }
+
+    /// Tab-separated table for paste into Numbers / Excel / editors.
+    pub fn dataframe_as_tsv(df: &DataFrame) -> String {
+        let cols = [
+            "symbol",
+            "name",
+            "price",
+            "unit",
+            "unit_hint",
+            "day_open",
+            "change_day",
+            "pct_day",
+            "direction_day",
+        ];
+
+        let mut out = String::new();
+        out.push_str(&cols.join("\t"));
+        out.push('\n');
+
+        if df.height() == 0 {
+            return out;
+        }
+
+        for i in 0..df.height() {
+            let mut cells = Vec::with_capacity(cols.len());
+            for col_name in &cols {
+                let cell = match df.column(col_name) {
+                    Ok(col) => Self::cell_at(col, i),
+                    Err(_) => String::new(),
+                };
+                cells.push(cell);
+            }
+            out.push_str(&cells.join("\t"));
+            out.push('\n');
+        }
+        out
+    }
+
+    fn cell_at(col: &Column, row: usize) -> String {
+        if let Ok(ca) = col.str()
+            && let Some(s) = ca.get(row)
+        {
+            return s.to_string();
+        }
+        if let Ok(ca) = col.f64() {
+            return match ca.get(row) {
+                Some(v) if v.is_nan() => String::new(),
+                Some(v) => format!("{:.6}", v),
+                None => String::new(),
+            };
+        }
+        String::new()
     }
 
     pub fn version_item() -> MenuItem {
@@ -171,5 +226,44 @@ mod tests {
     #[test]
     fn item_id_normalizes_name() {
         assert_eq!(MenuBuilder::item_id("TTF Gas"), "ttf_gas");
+    }
+
+    #[test]
+    fn dataframe_as_tsv_empty_has_header() {
+        let df = DataFrame::new_infer_height(vec![
+            Series::new("symbol".into(), Vec::<String>::new()).into(),
+            Series::new("name".into(), Vec::<String>::new()).into(),
+            Series::new("price".into(), Vec::<f64>::new()).into(),
+            Series::new("unit".into(), Vec::<String>::new()).into(),
+            Series::new("unit_hint".into(), Vec::<String>::new()).into(),
+            Series::new("day_open".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("change_day".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("pct_day".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("direction_day".into(), Vec::<String>::new()).into(),
+        ])
+        .expect("empty df");
+        let tsv = MenuBuilder::dataframe_as_tsv(&df);
+        assert!(tsv.starts_with("symbol\tname\tprice"));
+        assert_eq!(tsv.lines().count(), 1);
+    }
+
+    #[test]
+    fn dataframe_as_tsv_row() {
+        let df = DataFrame::new_infer_height(vec![
+            Series::new("symbol".into(), vec!["💰".to_string()]).into(),
+            Series::new("name".into(), vec!["Bitcoin".to_string()]).into(),
+            Series::new("price".into(), vec![67000.0]).into(),
+            Series::new("unit".into(), vec!["EUR".to_string()]).into(),
+            Series::new("unit_hint".into(), vec!["".to_string()]).into(),
+            Series::new("day_open".into(), vec![Some(66000.0)]).into(),
+            Series::new("change_day".into(), vec![Some(1000.0)]).into(),
+            Series::new("pct_day".into(), vec![Some(1.515)]).into(),
+            Series::new("direction_day".into(), vec!["up".to_string()]).into(),
+        ])
+        .expect("row df");
+        let tsv = MenuBuilder::dataframe_as_tsv(&df);
+        assert!(tsv.contains("Bitcoin"));
+        assert!(tsv.contains("67000"));
+        assert!(tsv.contains("up"));
     }
 }
