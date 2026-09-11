@@ -8,6 +8,8 @@ mod menubar;
 mod price_fetcher;
 mod price_history;
 mod price_watch;
+mod watch_ui;
+mod watch_cli;
 
 // Add dhat allocator (only when feature enabled)
 #[cfg(feature = "dhat-heap")]
@@ -43,6 +45,21 @@ fn main() {
 
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
+
+    // Check for CLI arguments for watch management
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        match watch_cli::handle_watch_command(&args[1..]) {
+            Ok(output) => {
+                println!("{}", output);
+                return;
+            }
+            Err(e) => {
+                eprintln!("❌ Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+    }
 
     match menubar::run_menubar() {
         Ok(_) => log_message("✓ Ticker app exited normally"),
