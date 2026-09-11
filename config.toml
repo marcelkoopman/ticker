@@ -39,3 +39,10 @@ url = "https://eurooilwatch.com/api/v1/prices"
 price_path = "countries.countryCode=NL.dieselPrice"
 unit = "EUR"
 symbol = "🛢️"
+
+[[assets]]
+name = "Power NL"
+url = "https://dap.xadi.eu/api/nl/today"
+price_path = "data.0.price"
+unit = "EUR"
+symbol = "⚡"
