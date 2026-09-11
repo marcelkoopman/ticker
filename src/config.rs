@@ -14,6 +14,7 @@ pub struct Asset {
     pub url: String,
     pub price_path: String,
     pub unit: String,
+    pub unit_hint: String,
     pub symbol: String,
 }
 
@@ -61,6 +62,7 @@ name = "Bitcoin"
 url = "https://example.com/btc"
 price_path = "bitcoin.eur"
 unit = "EUR"
+unit_hint = "/BTC"
 symbol = "💰"
 
 [[assets]]
@@ -68,6 +70,7 @@ name = "Gold"
 url = "https://example.com/gold"
 price_path = "xau.price"
 unit = "EUR"
+unit_hint = "/troy oz"
 symbol = "🥇"
 "#
     }

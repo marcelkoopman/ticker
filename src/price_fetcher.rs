@@ -53,14 +53,6 @@ impl PriceFetcher {
             Ok(response) => match response.error_for_status() {
                 Ok(resp) => match resp.json::<Value>() {
                     Ok(json) => {
-                        let json_str = serde_json::to_string(&json).unwrap_or_default();
-                        let preview_len = std::cmp::min(500, json_str.len());
-                        eprintln!(
-                            "📦 Raw JSON (first {} chars): {}",
-                            preview_len,
-                            &json_str[..preview_len]
-                        );
-
                         if let Some(price_value) = self.get_value_by_path(&json, &asset.price_path)
                         {
                             match price_value {
@@ -90,12 +82,13 @@ impl PriceFetcher {
         }
     }
 
-    /// Fetch all assets into a base DataFrame: symbol, name, price, unit.
+    /// Fetch all assets into a base DataFrame: symbol, name, price, unit, unit_hints.
     pub fn fetch_all(&self, assets: &[Asset]) -> Result<DataFrame, Box<dyn Error>> {
         let mut symbols: Vec<String> = Vec::with_capacity(assets.len());
         let mut names: Vec<String> = Vec::with_capacity(assets.len());
         let mut prices: Vec<f64> = Vec::with_capacity(assets.len());
         let mut units: Vec<String> = Vec::with_capacity(assets.len());
+        let mut unit_hints: Vec<String> = Vec::with_capacity(assets.len());
 
         for asset in assets {
             let price = self.fetch_price(asset);
@@ -103,6 +96,7 @@ impl PriceFetcher {
             names.push(asset.name.clone());
             prices.push(price);
             units.push(asset.unit.clone());
+            unit_hints.push(asset.unit_hint.clone());
         }
 
         DataFrame::new_infer_height(vec![
@@ -110,6 +104,7 @@ impl PriceFetcher {
             Series::new("name".into(), names).into(),
             Series::new("price".into(), prices).into(),
             Series::new("unit".into(), units).into(),
+            Series::new("unit_hint".into(), unit_hints).into(),
         ])
         .map_err(|e| e.into())
     }
@@ -302,7 +297,7 @@ mod tests {
         let f = fetcher();
         let df = f.fetch_all(&[]).expect("empty df");
         assert_eq!(df.height(), 0);
-        assert_eq!(df.width(), 4);
+        assert_eq!(df.width(), 5);
     }
 
     #[test]

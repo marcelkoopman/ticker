@@ -18,19 +18,22 @@ impl MenuBuilder {
             let names = df.column("name").ok().and_then(|c| c.str().ok());
             let prices = df.column("price").ok().and_then(|c| c.f64().ok());
             let units = df.column("unit").ok().and_then(|c| c.str().ok());
+            let unit_hints = df.column("unit_hint").ok().and_then(|c| c.str().ok());
+
             // Day change is the primary signal shown in the menu.
             let changes = df.column("change_day").ok().and_then(|c| c.f64().ok());
             let pcts = df.column("pct_day").ok().and_then(|c| c.f64().ok());
             let directions = df.column("direction_day").ok().and_then(|c| c.str().ok());
 
-            if let (Some(symbols), Some(names), Some(prices), Some(units)) =
-                (symbols, names, prices, units)
+            if let (Some(symbols), Some(names), Some(prices), Some(units), Some(unit_hints)) =
+                (symbols, names, prices, units, unit_hints)
             {
                 for i in 0..df.height() {
                     let symbol = symbols.get(i).unwrap_or(".");
                     let name = names.get(i).unwrap_or("?");
                     let price = prices.get(i).unwrap_or(f64::NAN);
                     let unit = units.get(i).unwrap_or("");
+                    let unit_hint = unit_hints.get(i).unwrap_or("");
 
                     let formatted_price = Self::format_price(price);
                     let currency = Self::unit_to_currency(unit);
@@ -58,7 +61,7 @@ impl MenuBuilder {
                         }
                         (Some(change), Some(pct), Some("flat")) => {
                             format!(
-                                " today {} {} ({:.2}%)",
+                                " | today {} {} ({:.2}%)",
                                 currency,
                                 Self::format_price(change.abs()),
                                 pct
@@ -68,8 +71,8 @@ impl MenuBuilder {
                     };
 
                     let row = format!(
-                        "{} {} — {} {}{}",
-                        symbol, name, currency, formatted_price, change_text
+                        "{} {} - {}{} {}{}",
+                        symbol, name, currency, formatted_price, unit_hint, change_text
                     );
                     let item_id = Self::item_id(name);
                     let item = MenuItem::with_id(&item_id, &row, true, None);
