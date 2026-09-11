@@ -18,9 +18,10 @@ impl MenuBuilder {
             let names = df.column("name").ok().and_then(|c| c.str().ok());
             let prices = df.column("price").ok().and_then(|c| c.f64().ok());
             let units = df.column("unit").ok().and_then(|c| c.str().ok());
-            let changes = df.column("change").ok().and_then(|c| c.f64().ok());
-            let pcts = df.column("pct_change").ok().and_then(|c| c.f64().ok());
-            let directions = df.column("direction").ok().and_then(|c| c.str().ok());
+            // Day change is the primary signal shown in the menu.
+            let changes = df.column("change_day").ok().and_then(|c| c.f64().ok());
+            let pcts = df.column("pct_day").ok().and_then(|c| c.f64().ok());
+            let directions = df.column("direction_day").ok().and_then(|c| c.str().ok());
 
             if let (Some(symbols), Some(names), Some(prices), Some(units)) =
                 (symbols, names, prices, units)
@@ -41,7 +42,7 @@ impl MenuBuilder {
                     ) {
                         (Some(change), Some(pct), Some("up")) => {
                             format!(
-                                " 🟢 {} {} (+{:.2}%)",
+                                " 🟢 today {} {} (+{:.2}%)",
                                 currency,
                                 Self::format_price(change),
                                 pct
@@ -49,7 +50,15 @@ impl MenuBuilder {
                         }
                         (Some(change), Some(pct), Some("down")) => {
                             format!(
-                                " 🔴 {} {} ({:.2}%)",
+                                " 🔴 today {} {} ({:.2}%)",
+                                currency,
+                                Self::format_price(change.abs()),
+                                pct
+                            )
+                        }
+                        (Some(change), Some(pct), Some("flat")) => {
+                            format!(
+                                " today {} {} ({:.2}%)",
                                 currency,
                                 Self::format_price(change.abs()),
                                 pct
