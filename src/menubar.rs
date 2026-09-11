@@ -27,7 +27,7 @@ struct App {
     tray: Rc<RefCell<TrayIcon>>,
     fetcher: Option<PriceFetcher>,
     config: Option<crate::config::Config>,
-    /// Latest prices DataFrame (symbol, name, price, unit, prev_price, change, pct_change, direction).
+    /// Latest prices DataFrame (incl. poll change + day change columns).
     prices_df: Option<DataFrame>,
     links: HashMap<String, String>,
     next_check: SystemTime,
@@ -113,17 +113,24 @@ impl ApplicationHandler for App {
 
 impl App {
     fn poll_prices(&mut self) {
-        let Some(config) = &self.config else { return };
-        let Some(fetcher) = &self.fetcher else { return };
+        let Some(config) = &self.config else {
+            return;
+        };
+        let Some(fetcher) = &self.fetcher else {
+            return;
+        };
+
+        // Day opens for the local calendar day (empty on first run / new day).
+        let day_opens = price_history::load_day_opens();
 
         let result = match &self.prices_df {
             None => {
                 eprintln!("📊 First poll — constructing DataFrame");
-                fetcher.build_initial_dataframe(&config.assets)
+                fetcher.build_initial_dataframe(&config.assets, &day_opens)
             }
             Some(previous) => {
                 eprintln!("📊 Updating existing DataFrame");
-                fetcher.update_dataframe(previous, &config.assets)
+                fetcher.update_dataframe(previous, &config.assets, &day_opens)
             }
         };
 
@@ -135,10 +142,14 @@ impl App {
             }
         };
 
-        // Persist current prices for next app launch (optional baseline)
+        // Persist last-poll prices (legacy baseline).
         let mut history = HashMap::new();
-        if let (Ok(names), Ok(prices)) = (df.column("name"), df.column("price"))
-            && let (Ok(name_ca), Ok(price_ca)) = (names.str(), prices.f64())
+        // Persist day opens (first price of today per asset).
+        let mut opens = HashMap::new();
+        if let (Ok(names), Ok(prices), Ok(day_open_col)) =
+            (df.column("name"), df.column("price"), df.column("day_open"))
+            && let (Ok(name_ca), Ok(price_ca), Ok(open_ca)) =
+                (names.str(), prices.f64(), day_open_col.f64())
         {
             for i in 0..df.height() {
                 if let (Some(name), Some(price)) = (name_ca.get(i), price_ca.get(i))
@@ -146,12 +157,22 @@ impl App {
                 {
                     history.insert(name.to_string(), price);
                 }
+                if let (Some(name), Some(open)) = (name_ca.get(i), open_ca.get(i))
+                    && !open.is_nan()
+                {
+                    opens.insert(name.to_string(), open);
+                }
             }
         }
         if !history.is_empty()
             && let Err(e) = price_history::save_price_history(&history)
         {
             eprintln!("⚠️  Failed to save price history: {}", e);
+        }
+        if !opens.is_empty()
+            && let Err(e) = price_history::save_day_opens(&opens)
+        {
+            eprintln!("⚠️  Failed to save day opens: {}", e);
         }
 
         self.prices_df = Some(df);
@@ -167,7 +188,7 @@ impl App {
         let Some(df) = &self.prices_df else {
             return false;
         };
-        let Ok(directions) = df.column("direction") else {
+        let Ok(directions) = df.column("direction_day") else {
             return false;
         };
         let Ok(dir_ca) = directions.str() else {
@@ -193,6 +214,10 @@ impl App {
             Series::new("change".into(), Vec::<Option<f64>>::new()).into(),
             Series::new("pct_change".into(), Vec::<Option<f64>>::new()).into(),
             Series::new("direction".into(), Vec::<String>::new()).into(),
+            Series::new("day_open".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("change_day".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("pct_day".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("direction_day".into(), Vec::<String>::new()).into(),
         ])
         .expect("empty dataframe");
 

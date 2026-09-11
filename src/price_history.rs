@@ -74,16 +74,12 @@ pub fn save_day_opens(opens: &HashMap<String, f64>) -> Result<(), Box<dyn Error>
     save_day_opens_to(&price_history_path(), opens)
 }
 
-pub fn save_day_opens_to(
-    path: &Path,
-    opens: &HashMap<String, f64>,
-) -> Result<(), Box<dyn Error>> {
+pub fn save_day_opens_to(path: &Path, opens: &HashMap<String, f64>) -> Result<(), Box<dyn Error>> {
     let today = today_local();
     let mut file = load_file(path);
 
     // Drop opens from other days, then write today's.
-    file.day_opens
-        .retain(|_, open| open.date == today);
+    file.day_opens.retain(|_, open| open.date == today);
 
     for (name, value) in opens {
         if value.is_nan() || *value == 0.0 {
