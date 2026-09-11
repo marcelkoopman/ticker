@@ -115,9 +115,6 @@ impl PriceFetcher {
     }
 
     /// First poll: construct DataFrame with poll-change + day-change columns.
-    ///
-    /// `day_opens` maps asset name → first price of today (from disk). Missing names
-    /// use the freshly fetched price as today's open.
     pub fn build_initial_dataframe(
         &self,
         assets: &[Asset],
@@ -136,7 +133,6 @@ impl PriceFetcher {
     ) -> Result<DataFrame, Box<dyn Error>> {
         let fresh = self.fetch_all(assets)?;
 
-        // prev_price comes from previous.price, matched by name
         let prev_names = previous.column("name")?.str()?;
         let prev_prices = previous.column("price")?.f64()?;
 
@@ -151,7 +147,6 @@ impl PriceFetcher {
         Self::attach_change_columns(fresh, Some(&prev_by_name), day_opens)
     }
 
-    /// Shared logic: attach poll-change and day-change columns to a base price frame.
     fn attach_change_columns(
         mut df: DataFrame,
         prev_by_name: Option<&std::collections::HashMap<String, f64>>,
@@ -175,7 +170,6 @@ impl PriceFetcher {
             let name = names.get(i).unwrap_or("");
             let price = prices.get(i).unwrap_or(f64::NAN);
 
-            // --- poll-to-poll change ---
             let prev = prev_by_name.and_then(|m| m.get(name).copied());
             prev_price_col.push(prev);
             if let Some(p) = prev {
@@ -196,8 +190,6 @@ impl PriceFetcher {
                 direction_col.push(String::new());
             }
 
-            // --- day change (vs first price of today) ---
-            // Prefer stored day open; otherwise use current price as open (first poll of day).
             let open = day_opens
                 .get(name)
                 .copied()
