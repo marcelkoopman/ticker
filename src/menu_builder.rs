@@ -86,7 +86,7 @@ impl MenuBuilder {
         let _ = menu.append(&PredefinedMenuItem::separator());
         let poll_item = MenuItem::with_id("poll", "🔄  Poll now", true, None);
         let _ = menu.append(&poll_item);
-        let copy_item = MenuItem::with_id("copy", "📋  Copy prices", true, None);
+        let copy_item = MenuItem::with_id("copy", "📋  Copy to clipboard", true, None);
         let _ = menu.append(&copy_item);
 
         let _ = menu.append(&PredefinedMenuItem::separator());

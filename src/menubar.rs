@@ -134,10 +134,7 @@ impl App {
 
         match arboard::Clipboard::new() {
             Ok(mut clipboard) => match clipboard.set_text(tsv) {
-                Ok(()) => eprintln!(
-                    "📋 Copied {} price row(s) to clipboard (TSV)",
-                    df.height()
-                ),
+                Ok(()) => eprintln!("📋 Copied {} price row(s) to clipboard (TSV)", df.height()),
                 Err(e) => eprintln!("✗ Failed to set clipboard text: {}", e),
             },
             Err(e) => eprintln!("✗ Failed to open clipboard: {}", e),
