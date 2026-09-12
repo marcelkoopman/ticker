@@ -5,21 +5,14 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  schedule:
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Run tests
-        run: cargo test --verbose
-
   fmt:
     name: Rustfmt
     runs-on: ubuntu-latest
@@ -30,8 +23,8 @@ jobs:
           components: rustfmt
       - run: cargo fmt -- --check
 
-  clippy:
-    name: Clippy
+  lint-test:
+    name: Clippy and test
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -40,22 +33,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -- -D warnings
-
-  coverage:
-    name: Code Coverage
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install tarpaulin
-        run: cargo install cargo-tarpaulin
-      - name: Generate coverage
-        run: cargo tarpaulin --out Xml
-      - name: Upload coverage
-        uses: codecov/codecov-action@v7
-        with:
-          files: ./cobertura.xml
+      - run: cargo test
 
   machete:
     name: Unused dependencies
@@ -63,20 +41,37 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+      - run: cargo machete
+
+  coverage:
+    name: Code coverage
+    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-machete
-        run: cargo install cargo-machete --locked
-      - name: Check for unused dependencies
-        run: cargo machete
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - run: cargo llvm-cov --lcov --output-path lcov.info
+      - uses: codecov/codecov-action@v7
+        with:
+          files: ./lcov.info
 
   audit:
     name: Security audit
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: Run cargo audit
-        run: cargo audit
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
