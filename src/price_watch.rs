@@ -63,10 +63,13 @@ impl WatchList {
 
     pub fn remove_watch(&mut self, asset_name: &str, target_price: f64) -> bool {
         let initial_len = self.watches.len();
-        self.watches.retain(|w| !(w.asset_name == asset_name && w.target_price == target_price));
+        self.watches
+            .retain(|w| !(w.asset_name == asset_name && w.target_price == target_price));
         self.watches.len() < initial_len
     }
 
+    /// Filter watches for a single asset (CLI / future UI).
+    #[allow(dead_code)]
     pub fn get_watches_for_asset(&self, asset_name: &str) -> Vec<&PriceWatch> {
         self.watches
             .iter()
@@ -74,8 +77,8 @@ impl WatchList {
             .collect()
     }
 
-    /// Check if current price triggers any watches
-    /// Returns triggered watches and updates their state
+    /// Check if current price triggers any watches.
+    /// Returns triggered watches and updates their state.
     pub fn check_price(&mut self, asset_name: &str, current_price: f64) -> Vec<PriceWatch> {
         let mut triggered = Vec::new();
 
@@ -96,17 +99,18 @@ impl WatchList {
         triggered
     }
 
-    /// Reset triggered state for a watch (for new trading day)
+    /// Reset triggered state for a watch (e.g. new trading day).
+    #[allow(dead_code)]
     pub fn reset_watch_state(&mut self, asset_name: &str, target_price: f64) {
         for watch in &mut self.watches {
-            if watch.asset_name == asset_name && (watch.target_price - target_price).abs() < 0.01
-            {
+            if watch.asset_name == asset_name && (watch.target_price - target_price).abs() < 0.01 {
                 watch.triggered = false;
             }
         }
     }
 
-    /// Reset all triggered states
+    /// Reset all triggered states.
+    #[allow(dead_code)]
     pub fn reset_all_states(&mut self) {
         for watch in &mut self.watches {
             watch.triggered = false;
