@@ -19,9 +19,9 @@ use crate::config::load_config;
 use crate::menu_builder::MenuBuilder;
 use crate::price_fetcher::PriceFetcher;
 use crate::price_history;
-use crate::price_watch::{WatchDirection, WatchList, load_watch_list, save_watch_list};
-use crate::watch_ui::{self, WatchUIBuilder};
+use crate::price_watch::{load_watch_list, save_watch_list, WatchDirection, WatchList};
 use std::process::Command;
+use crate::watch_ui::{self, WatchUIBuilder};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
@@ -80,11 +80,11 @@ impl ApplicationHandler for App {
                 "add_watch" => self.handle_add_watch(),
                 "manage_watches" => self.handle_manage_watches(),
                 id if id.starts_with("watch_") => {
-                    if let Some((asset, price)) = WatchUIBuilder::parse_watch_id(id) {
-                        if self.watch_list.remove_watch(&asset, price) {
-                            let _ = save_watch_list(&self.watch_list);
-                            self.update_menu();
-                        }
+                    if let Some((asset, price)) = WatchUIBuilder::parse_watch_id(id)
+                        && self.watch_list.remove_watch(&asset, price)
+                    {
+                        let _ = save_watch_list(&self.watch_list);
+                        self.update_menu();
                     }
                 }
                 id => {
@@ -139,19 +139,18 @@ impl App {
         let mut opens = HashMap::new();
         if let (Ok(names), Ok(prices), Ok(day_open_col)) =
             (df.column("name"), df.column("price"), df.column("day_open"))
+            && let (Ok(ns), Ok(ps), Ok(os)) = (names.str(), prices.f64(), day_open_col.f64())
         {
-            if let (Ok(ns), Ok(ps), Ok(os)) = (names.str(), prices.f64(), day_open_col.f64()) {
-                for i in 0..df.height() {
-                    if let (Some(n), Some(p)) = (ns.get(i), ps.get(i)) {
-                        if !p.is_nan() {
-                            history.insert(n.to_string(), p);
-                        }
-                    }
-                    if let (Some(n), Some(o)) = (ns.get(i), os.get(i)) {
-                        if !o.is_nan() {
-                            opens.insert(n.to_string(), o);
-                        }
-                    }
+            for i in 0..df.height() {
+                if let (Some(n), Some(p)) = (ns.get(i), ps.get(i))
+                    && !p.is_nan()
+                {
+                    history.insert(n.to_string(), p);
+                }
+                if let (Some(n), Some(o)) = (ns.get(i), os.get(i))
+                    && !o.is_nan()
+                {
+                    opens.insert(n.to_string(), o);
                 }
             }
         }
@@ -161,23 +160,23 @@ impl App {
         if !opens.is_empty() {
             let _ = price_history::save_day_opens(&opens);
         }
-        if let (Ok(names), Ok(prices)) = (df.column("name"), df.column("price")) {
-            if let (Ok(ns), Ok(ps)) = (names.str(), prices.f64()) {
-                let mut any = false;
-                for i in 0..df.height() {
-                    if let (Some(n), Some(p)) = (ns.get(i), ps.get(i)) {
-                        if !p.is_nan() {
-                            for w in self.watch_list.check_price(n, p) {
-                                let msg = WatchUIBuilder::format_trigger_notification(&w, p);
-                                watch_ui::send_macos_notification("Ticker Price Alert", &msg);
-                                any = true;
-                            }
-                        }
+        if let (Ok(names), Ok(prices)) = (df.column("name"), df.column("price"))
+            && let (Ok(ns), Ok(ps)) = (names.str(), prices.f64())
+        {
+            let mut any = false;
+            for i in 0..df.height() {
+                if let (Some(n), Some(p)) = (ns.get(i), ps.get(i))
+                    && !p.is_nan()
+                {
+                    for w in self.watch_list.check_price(n, p) {
+                        let msg = WatchUIBuilder::format_trigger_notification(&w, p);
+                        watch_ui::send_macos_notification("Ticker Price Alert", &msg);
+                        any = true;
                     }
                 }
-                if any {
-                    let _ = save_watch_list(&self.watch_list);
-                }
+            }
+            if any {
+                let _ = save_watch_list(&self.watch_list);
             }
         }
         self.prices_df = Some(df);
@@ -337,12 +336,8 @@ impl App {
         if self.watch_list.watches.iter().any(|w| w.triggered) {
             return true;
         }
-        let Some(df) = &self.prices_df else {
-            return false;
-        };
-        let Ok(col) = df.column("direction_day") else {
-            return false;
-        };
+        let Some(df) = &self.prices_df else { return false };
+        let Ok(col) = df.column("direction_day") else { return false };
         let Ok(ca) = col.str() else { return false };
         (0..df.height()).any(|i| matches!(ca.get(i), Some("up") | Some("down")))
     }
@@ -410,40 +405,35 @@ fn current_price_for(df: &DataFrame, asset: &str) -> Option<f64> {
 }
 
 fn run_osascript_output(script: &str) -> Option<String> {
-    let output = Command::new("osascript")
-        .args(["-e", script])
-        .output()
-        .ok()?;
+    let output = Command::new("osascript").args(["-e", script]).output().ok()?;
     if !output.status.success() {
         return None;
     }
     let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 fn run_osascript_button(script: &str) -> Option<String> {
-    let output = Command::new("osascript")
-        .args(["-e", script])
-        .output()
-        .ok()?;
+    let output = Command::new("osascript").args(["-e", script]).output().ok()?;
     if !output.status.success() {
         return None;
     }
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn fill_nan_from_prev(
-    df: &mut DataFrame,
-    prev: &DataFrame,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn fill_nan_from_prev(df: &mut DataFrame, prev: &DataFrame) -> Result<(), Box<dyn std::error::Error>> {
     let pn = prev.column("name")?.str()?;
     let pp = prev.column("price")?.f64()?;
     let mut map = HashMap::new();
     for i in 0..prev.height() {
-        if let (Some(n), Some(p)) = (pn.get(i), pp.get(i)) {
-            if !p.is_nan() {
-                map.insert(n.to_string(), p);
-            }
+        if let (Some(n), Some(p)) = (pn.get(i), pp.get(i))
+            && !p.is_nan()
+        {
+            map.insert(n.to_string(), p);
         }
     }
     let name_ca = df.column("name")?.str()?;
@@ -454,10 +444,10 @@ fn fill_nan_from_prev(
     }
     let prices = df.column("price")?.f64()?;
     let mut out = Vec::with_capacity(height);
-    for i in 0..height {
+    for (i, name) in names.iter().enumerate() {
         let p = prices.get(i).unwrap_or(f64::NAN);
         out.push(if p.is_nan() {
-            map.get(&names[i]).copied().unwrap_or(f64::NAN)
+            map.get(name).copied().unwrap_or(f64::NAN)
         } else {
             p
         });
@@ -467,17 +457,17 @@ fn fill_nan_from_prev(
 }
 
 fn bundle_assets_dir() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(app) = exe.ancestors().find(|p| {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(app) = exe.ancestors().find(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
                 .map(|n| n.ends_with(".app"))
                 .unwrap_or(false)
-        }) {
-            let a = app.join("Contents/Resources/assets");
-            if a.exists() {
-                return a;
-            }
+        })
+    {
+        let a = app.join("Contents/Resources/assets");
+        if a.exists() {
+            return a;
         }
     }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
