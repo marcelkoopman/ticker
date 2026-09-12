@@ -5,7 +5,16 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
+    /// Name of the asset shown in the menu-bar title. Defaults to first priced row.
+    #[serde(default)]
+    pub menubar_asset: Option<String>,
     pub assets: Vec<Asset>,
+}
+
+impl Config {
+    pub fn menubar_asset_name(&self) -> Option<&str> {
+        self.menubar_asset.as_deref().filter(|s| !s.is_empty())
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -47,7 +56,39 @@ pub fn load_config() -> Result<Config, Box<dyn Error>> {
     eprintln!("📋 Looking for config.toml...");
     let path = config_path()?;
     eprintln!("📂 Reading config from: {:?}", path);
-    load_config_from(&path)
+    let mut config = load_config_from(&path)?;
+    if let Some(pin) = load_menubar_pin() {
+        config.menubar_asset = Some(pin);
+    }
+    Ok(config)
+}
+
+fn menubar_pin_path() -> Result<PathBuf, Box<dyn Error>> {
+    if let Ok(path) = std::env::var("TICKER_MENUBAR_PIN_PATH")
+        && !path.is_empty()
+    {
+        return Ok(PathBuf::from(path));
+    }
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    Ok(home.join(".ticker_menubar_asset"))
+}
+
+/// Last asset the user pinned by clicking a price row.
+pub fn load_menubar_pin() -> Option<String> {
+    let path = menubar_pin_path().ok()?;
+    let raw = fs::read_to_string(path).ok()?;
+    let name = raw.trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+pub fn save_menubar_pin(name: &str) -> Result<(), Box<dyn Error>> {
+    let path = menubar_pin_path()?;
+    fs::write(path, name.trim())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -84,6 +125,14 @@ symbol = "🥇"
         assert_eq!(config.assets[0].symbol, "💰");
         assert_eq!(config.assets[1].name, "Gold");
         assert_eq!(config.assets[1].unit, "EUR");
+        assert!(config.menubar_asset.is_none());
+    }
+
+    #[test]
+    fn parse_config_menubar_asset() {
+        let toml = "menubar_asset = \"Gold\"\n\n[[assets]]\nname = \"Gold\"\nurl = \"https://example.com\"\nprice_path = \"xau.price\"\nunit = \"EUR\"\nunit_hint = \"/oz\"\nsymbol = \"🥇\"\n";
+        let config = parse_config(toml).expect("should parse");
+        assert_eq!(config.menubar_asset_name(), Some("Gold"));
     }
 
     #[test]
@@ -132,5 +181,23 @@ url = "https://example.com"
     fn config_path_returns_some_path() {
         let path = config_path().expect("should resolve");
         assert!(path.to_string_lossy().contains("config.toml"));
+    }
+
+    #[test]
+    fn menubar_pin_roundtrip() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ticker-menubar-pin-{stamp}"));
+        unsafe {
+            std::env::set_var("TICKER_MENUBAR_PIN_PATH", &path);
+        }
+        save_menubar_pin("Gold").expect("save");
+        assert_eq!(load_menubar_pin().as_deref(), Some("Gold"));
+        let _ = fs::remove_file(&path);
+        unsafe {
+            std::env::remove_var("TICKER_MENUBAR_PIN_PATH");
+        }
     }
 }

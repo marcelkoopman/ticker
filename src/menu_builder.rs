@@ -121,13 +121,76 @@ impl MenuBuilder {
         menu
     }
 
+    /// Compact tray title, e.g. "💰 €66.553".
+    /// Prefers `preferred` asset name; otherwise the first row with a real price.
+    pub fn menubar_title(df: &DataFrame, preferred: Option<&str>) -> String {
+        if df.height() == 0 {
+            return "Ticker".to_string();
+        }
+        let names = df.column("name").ok().and_then(|c| c.str().ok());
+        let prices = df.column("price").ok().and_then(|c| c.f64().ok());
+        let units = df.column("unit").ok().and_then(|c| c.str().ok());
+        let symbols = df.column("symbol").ok().and_then(|c| c.str().ok());
+        let Some(names) = names else {
+            return "Ticker".to_string();
+        };
+        let Some(prices) = prices else {
+            return "Ticker".to_string();
+        };
+
+        let mut idx = None;
+        if let Some(want) = preferred {
+            for i in 0..df.height() {
+                if names.get(i) == Some(want) && prices.get(i).is_some_and(|p| !p.is_nan()) {
+                    idx = Some(i);
+                    break;
+                }
+            }
+        }
+        if idx.is_none() {
+            for i in 0..df.height() {
+                if prices.get(i).is_some_and(|p| !p.is_nan()) {
+                    idx = Some(i);
+                    break;
+                }
+            }
+        }
+        let Some(i) = idx else {
+            return "Ticker".to_string();
+        };
+        let price = prices.get(i).unwrap_or(f64::NAN);
+        let unit = units.and_then(|c| c.get(i)).unwrap_or("EUR");
+        let symbol = symbols.and_then(|c| c.get(i)).unwrap_or("");
+        let currency = Self::unit_to_currency(unit);
+        let price_txt = Self::format_menubar_price(price);
+        if symbol.is_empty() {
+            format!("{currency}{price_txt}")
+        } else {
+            format!("{symbol} {currency}{price_txt}")
+        }
+    }
+
+    fn format_menubar_price(price: f64) -> String {
+        if price.is_nan() {
+            return "?".to_string();
+        }
+        if price.abs() >= 100.0 {
+            let formatted = Self::format_price(price.round());
+            formatted
+                .split_once(',')
+                .map(|(int, _)| int.to_string())
+                .unwrap_or(formatted)
+        } else {
+            Self::format_price(price)
+        }
+    }
+
     /// Compact two-line price row (primary price + day change).
     /// The change line is omitted when the day change is zero, flat, or unavailable.
     fn format_price_row(row: &PriceRow<'_>) -> String {
         let currency = Self::unit_to_currency(row.unit);
         let price_txt = Self::format_price(row.price);
 
-        // unit_hint is often "/BTC", "/MWh", etc.
         let unit_part = {
             let h = row.unit_hint.trim();
             if h.is_empty() {
@@ -145,13 +208,8 @@ impl MenuBuilder {
             format!("{} {}", row.symbol, row.name)
         };
 
-        // Line 1: "💰 Bitcoin  €66.672 / BTC"
         let line1 = format!("{}  {}{}{}", label, currency, price_txt, unit_part);
 
-        // Line 2 uses ▲/▼ (not 🟢/🔴) so the change reads as movement, not a status light.
-        // MenuItem titles cannot set a background colour via tray-icon; glyphs carry the signal.
-        // Hide the change entirely when it is zero / flat / unavailable so the menu does not
-        // show a dead "· €0,00 · 0.00%" for assets that do not move often (fuel, power, …).
         let line2 = match (row.change, row.pct, row.direction) {
             (Some(c), Some(p), Some("up")) => {
                 format!("  ▲ {}{} · +{:.2}%", currency, Self::format_price(c), p)
@@ -243,6 +301,18 @@ impl MenuBuilder {
         name.to_lowercase().replace(' ', "_")
     }
 
+    /// Map a price-row menu id back to the asset display name.
+    pub fn asset_name_for_item_id(df: &DataFrame, item_id: &str) -> Option<String> {
+        let names = df.column("name").ok()?.str().ok()?;
+        for i in 0..df.height() {
+            let name = names.get(i)?;
+            if Self::item_id(name) == item_id {
+                return Some(name.to_string());
+            }
+        }
+        None
+    }
+
     fn format_price(price: f64) -> String {
         if price.is_nan() {
             return "?".to_string();
@@ -284,6 +354,25 @@ impl MenuBuilder {
 mod tests {
     use super::*;
 
+    fn sample_df() -> DataFrame {
+        DataFrame::new_infer_height(vec![
+            Series::new("symbol".into(), vec!["💰".to_string(), "⛽".to_string()]).into(),
+            Series::new(
+                "name".into(),
+                vec!["Bitcoin".to_string(), "Benzine".to_string()],
+            )
+            .into(),
+            Series::new("price".into(), vec![66553.0_f64, 2.47]).into(),
+            Series::new("unit".into(), vec!["EUR".to_string(), "EUR".to_string()]).into(),
+            Series::new(
+                "unit_hint".into(),
+                vec!["/BTC".to_string(), "/L".to_string()],
+            )
+            .into(),
+        ])
+        .expect("sample df")
+    }
+
     #[test]
     fn version_includes_app_and_polars() {
         assert!(!env!("CARGO_PKG_VERSION").is_empty());
@@ -303,6 +392,20 @@ mod tests {
     #[test]
     fn item_id_normalizes_name() {
         assert_eq!(MenuBuilder::item_id("TTF Gas"), "ttf_gas");
+    }
+
+    #[test]
+    fn asset_name_for_item_id_roundtrip() {
+        let df = sample_df();
+        assert_eq!(
+            MenuBuilder::asset_name_for_item_id(&df, "bitcoin").as_deref(),
+            Some("Bitcoin")
+        );
+        assert_eq!(
+            MenuBuilder::asset_name_for_item_id(&df, "benzine").as_deref(),
+            Some("Benzine")
+        );
+        assert_eq!(MenuBuilder::asset_name_for_item_id(&df, "poll"), None);
     }
 
     #[test]
@@ -382,5 +485,39 @@ mod tests {
         let tsv = MenuBuilder::dataframe_as_tsv(&df);
         assert!(tsv.starts_with("symbol\tname\tprice"));
         assert_eq!(tsv.lines().count(), 1);
+    }
+
+    #[test]
+    fn menubar_title_prefers_named_asset() {
+        let df = sample_df();
+        let title = MenuBuilder::menubar_title(&df, Some("Bitcoin"));
+        assert!(title.contains("💰"));
+        assert!(title.contains("€"));
+        assert!(title.contains("66.553"));
+        assert!(!title.contains(",00"));
+    }
+
+    #[test]
+    fn menubar_title_falls_back_to_first_price() {
+        let df = sample_df();
+        let title = MenuBuilder::menubar_title(&df, Some("Missing"));
+        assert!(title.contains("66.553"));
+    }
+
+    #[test]
+    fn menubar_title_keeps_decimals_for_small_prices() {
+        let df = sample_df();
+        let title = MenuBuilder::menubar_title(&df, Some("Benzine"));
+        assert!(title.contains("2,47"));
+    }
+
+    #[test]
+    fn menubar_title_empty_df() {
+        let df = DataFrame::new_infer_height(vec![
+            Series::new("name".into(), Vec::<String>::new()).into(),
+            Series::new("price".into(), Vec::<f64>::new()).into(),
+        ])
+        .expect("empty");
+        assert_eq!(MenuBuilder::menubar_title(&df, None), "Ticker");
     }
 }

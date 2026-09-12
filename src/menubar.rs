@@ -15,7 +15,7 @@ use winit::{
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
 };
 
-use crate::config::load_config;
+use crate::config::{self, load_config};
 use crate::menu_builder::MenuBuilder;
 use crate::price_fetcher::PriceFetcher;
 use crate::price_history;
@@ -31,7 +31,6 @@ struct App {
     config: Option<crate::config::Config>,
     prices_df: Option<DataFrame>,
     watch_list: WatchList,
-    links: HashMap<String, String>,
     next_check: SystemTime,
     normal_icon: Icon,
     alert_icon: Icon,
@@ -87,11 +86,7 @@ impl ApplicationHandler for App {
                         self.update_menu();
                     }
                 }
-                id => {
-                    if let Some(url) = self.links.get(id) {
-                        let _ = webbrowser::open(url);
-                    }
-                }
+                id => self.pin_menubar_from_item(id),
             }
         }
 
@@ -108,6 +103,22 @@ impl ApplicationHandler for App {
 }
 
 impl App {
+    fn pin_menubar_from_item(&mut self, item_id: &str) {
+        let Some(df) = &self.prices_df else {
+            return;
+        };
+        let Some(name) = MenuBuilder::asset_name_for_item_id(df, item_id) else {
+            return;
+        };
+        if let Some(config) = &mut self.config {
+            config.menubar_asset = Some(name.clone());
+        }
+        if let Err(e) = config::save_menubar_pin(&name) {
+            eprintln!("Failed to save menubar pin: {e}");
+        }
+        self.update_menu();
+    }
+
     fn copy_prices_to_clipboard(&self) {
         let empty = Self::empty_df();
         let df = self.prices_df.as_ref().unwrap_or(&empty);
@@ -333,7 +344,6 @@ impl App {
     }
 
     fn has_alert(&self) -> bool {
-        // Show update.png only after a watch notification has fired.
         self.watch_list.watches.iter().any(|w| w.triggered)
     }
 
@@ -341,6 +351,8 @@ impl App {
         let empty = Self::empty_df();
         let df = self.prices_df.clone().unwrap_or(empty);
         let menu = MenuBuilder::build(&df, &self.watch_list);
+        let pin = self.config.as_ref().and_then(|c| c.menubar_asset_name());
+        let title = MenuBuilder::menubar_title(&df, pin);
         if let Ok(tray) = self.tray.try_borrow_mut() {
             tray.set_menu(Some(Box::new(menu)));
             let icon = if self.has_alert() {
@@ -349,7 +361,7 @@ impl App {
                 self.normal_icon.clone()
             };
             let _ = tray.set_icon(Some(icon));
-            tray.set_title(Some("Ticker"));
+            tray.set_title(Some(&title));
         }
     }
 
@@ -492,14 +504,6 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
     let fetcher = PriceFetcher::new()?;
     let normal_icon = load_icon("normal.png").unwrap_or_else(|_| fallback_icon(255, 255, 255));
     let alert_icon = load_icon("update.png").unwrap_or_else(|_| fallback_icon(255, 80, 80));
-    let mut links = HashMap::new();
-    links.insert("bitcoin".into(), "https://bitcoin.nl".into());
-    links.insert("eth".into(), "https://bitcoin.nl".into());
-    links.insert("gold".into(), "https://xaus.com".into());
-    links.insert("gas".into(), "https://eurooilwatch.com".into());
-    links.insert("benzine".into(), "https://eurooilwatch.com".into());
-    links.insert("diesel".into(), "https://eurooilwatch.com".into());
-    links.insert("power_nl".into(), "https://dap.xadi.eu".into());
 
     let menu = Menu::new();
     let _ = menu.append(&MenuItem::new("⏳ Loading...", false, None));
@@ -519,7 +523,6 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
         config: None,
         prices_df: None,
         watch_list: WatchList::new(),
-        links,
         next_check: SystemTime::now(),
         normal_icon,
         alert_icon,

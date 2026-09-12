@@ -1,3 +1,7 @@
+# Asset whose price is shown next to the tray icon.
+# Falls back to the first asset with a valid price.
+menubar_asset = "Bitcoin"
+
 [[assets]]
 name = "Bitcoin"
 url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=eur"
