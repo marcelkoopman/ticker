@@ -82,7 +82,6 @@ impl PriceFetcher {
         }
     }
 
-    /// Fetch all assets into a base DataFrame: symbol, name, price, unit, unit_hints.
     pub fn fetch_all(&self, assets: &[Asset]) -> Result<DataFrame, Box<dyn Error>> {
         let mut symbols: Vec<String> = Vec::with_capacity(assets.len());
         let mut names: Vec<String> = Vec::with_capacity(assets.len());
@@ -109,7 +108,6 @@ impl PriceFetcher {
         .map_err(|e| e.into())
     }
 
-    /// First poll: construct DataFrame with poll-change + day-change columns.
     pub fn build_initial_dataframe(
         &self,
         assets: &[Asset],
@@ -119,7 +117,6 @@ impl PriceFetcher {
         Self::attach_change_columns(base, None, day_opens)
     }
 
-    /// Subsequent poll: update prices and recompute poll + day change columns.
     pub fn update_dataframe(
         &self,
         previous: &DataFrame,
@@ -282,6 +279,7 @@ impl PriceFetcher {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
 
     fn fetcher() -> PriceFetcher {
         PriceFetcher::new().expect("client should build")
@@ -352,5 +350,100 @@ mod tests {
         let f = fetcher();
         let data = json!({"price": 1.0});
         assert!(f.get_value_by_path(&data, "missing").is_none());
+    }
+
+    #[test]
+    fn direction_label_thresholds() {
+        assert_eq!(PriceFetcher::direction_label(0.0), "flat");
+        assert_eq!(PriceFetcher::direction_label(0.01), "flat");
+        assert_eq!(PriceFetcher::direction_label(-0.01), "flat");
+        assert_eq!(PriceFetcher::direction_label(0.011), "up");
+        assert_eq!(PriceFetcher::direction_label(-0.011), "down");
+    }
+
+    fn base_df(name: &str, price: f64) -> DataFrame {
+        DataFrame::new_infer_height(vec![
+            Series::new("symbol".into(), vec!["X".to_string()]).into(),
+            Series::new("name".into(), vec![name.to_string()]).into(),
+            Series::new("price".into(), vec![price]).into(),
+            Series::new("unit".into(), vec!["EUR".to_string()]).into(),
+            Series::new("unit_hint".into(), vec!["/u".to_string()]).into(),
+        ])
+        .expect("df")
+    }
+
+    #[test]
+    fn attach_change_columns_poll_and_day_up() {
+        let df = base_df("Bitcoin", 110.0);
+        let prev = HashMap::from([("Bitcoin".to_string(), 100.0)]);
+        let opens = HashMap::from([("Bitcoin".to_string(), 100.0)]);
+        let df = PriceFetcher::attach_change_columns(df, Some(&prev), &opens).unwrap();
+
+        let change = df.column("change").unwrap().f64().unwrap().get(0);
+        let pct = df.column("pct_change").unwrap().f64().unwrap().get(0);
+        let dir = df.column("direction").unwrap().str().unwrap().get(0);
+        let day_dir = df.column("direction_day").unwrap().str().unwrap().get(0);
+        assert_eq!(change, Some(10.0));
+        assert!((pct.unwrap() - 10.0).abs() < 1e-9);
+        assert_eq!(dir, Some("up"));
+        assert_eq!(day_dir, Some("up"));
+    }
+
+    #[test]
+    fn attach_change_columns_day_down_poll_flat() {
+        let df = base_df("Gold", 100.005);
+        let prev = HashMap::from([("Gold".to_string(), 100.0)]);
+        let opens = HashMap::from([("Gold".to_string(), 110.0)]);
+        let df = PriceFetcher::attach_change_columns(df, Some(&prev), &opens).unwrap();
+
+        assert_eq!(
+            df.column("direction").unwrap().str().unwrap().get(0),
+            Some("flat")
+        );
+        assert_eq!(
+            df.column("direction_day").unwrap().str().unwrap().get(0),
+            Some("down")
+        );
+    }
+
+    #[test]
+    fn attach_change_columns_nan_price_has_no_change() {
+        let df = base_df("Gas", f64::NAN);
+        let prev = HashMap::from([("Gas".to_string(), 40.0)]);
+        let opens = HashMap::from([("Gas".to_string(), 40.0)]);
+        let df = PriceFetcher::attach_change_columns(df, Some(&prev), &opens).unwrap();
+
+        assert!(df.column("change").unwrap().f64().unwrap().get(0).is_none());
+        assert_eq!(
+            df.column("direction").unwrap().str().unwrap().get(0),
+            Some("")
+        );
+        assert_eq!(
+            df.column("direction_day").unwrap().str().unwrap().get(0),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn attach_change_columns_missing_open_uses_current_price() {
+        let df = base_df("Power", 50.0);
+        let df = PriceFetcher::attach_change_columns(df, None, &HashMap::new()).unwrap();
+        assert_eq!(
+            df.column("day_open").unwrap().f64().unwrap().get(0),
+            Some(50.0)
+        );
+        assert_eq!(
+            df.column("direction_day").unwrap().str().unwrap().get(0),
+            Some("flat")
+        );
+        assert!(df.column("change").unwrap().f64().unwrap().get(0).is_none());
+    }
+
+    #[test]
+    fn get_value_by_path_string_number() {
+        let f = fetcher();
+        let data = json!({"price": "42.5"});
+        let v = f.get_value_by_path(&data, "price").unwrap();
+        assert_eq!(v.as_str(), Some("42.5"));
     }
 }
