@@ -122,6 +122,7 @@ impl MenuBuilder {
     }
 
     /// Compact two-line price row (primary price + day change).
+    /// The change line is omitted when the day change is zero, flat, or unavailable.
     fn format_price_row(row: &PriceRow<'_>) -> String {
         let currency = Self::unit_to_currency(row.unit);
         let price_txt = Self::format_price(row.price);
@@ -149,6 +150,8 @@ impl MenuBuilder {
 
         // Line 2 uses ▲/▼ (not 🟢/🔴) so the change reads as movement, not a status light.
         // MenuItem titles cannot set a background colour via tray-icon; glyphs carry the signal.
+        // Hide the change entirely when it is zero / flat / unavailable so the menu does not
+        // show a dead "· €0,00 · 0.00%" for assets that do not move often (fuel, power, …).
         let line2 = match (row.change, row.pct, row.direction) {
             (Some(c), Some(p), Some("up")) => {
                 format!("  ▲ {}{} · +{:.2}%", currency, Self::format_price(c), p)
@@ -156,14 +159,6 @@ impl MenuBuilder {
             (Some(c), Some(p), Some("down")) => {
                 format!(
                     "  ▼ {}{} · {:.2}%",
-                    currency,
-                    Self::format_price(c.abs()),
-                    p
-                )
-            }
-            (Some(c), Some(p), Some("flat")) => {
-                format!(
-                    "  · {}{} · {:.2}%",
                     currency,
                     Self::format_price(c.abs()),
                     p
@@ -330,6 +325,41 @@ mod tests {
         assert!(lines[1].contains("▲"));
         assert!(lines[1].contains("€"));
         assert!(lines[1].contains("+0.33%"));
+    }
+
+    #[test]
+    fn format_price_row_hides_flat_or_zero_change() {
+        let row = MenuBuilder::format_price_row(&PriceRow {
+            symbol: "⛽",
+            name: "Benzine",
+            price: 2.47,
+            unit: "EUR",
+            unit_hint: "/L",
+            change: Some(0.0),
+            pct: Some(0.0),
+            direction: Some("flat"),
+        });
+        assert!(!row.contains('\n'), "flat/zero change must not produce a second line");
+        assert!(row.contains("Benzine"));
+        assert!(row.contains("2,47"));
+        assert!(!row.contains("0,00"));
+        assert!(!row.contains("0.00%"));
+    }
+
+    #[test]
+    fn format_price_row_hides_missing_change() {
+        let row = MenuBuilder::format_price_row(&PriceRow {
+            symbol: "⚡",
+            name: "Power NL",
+            price: 0.21,
+            unit: "EUR",
+            unit_hint: "/kWh",
+            change: None,
+            pct: None,
+            direction: None,
+        });
+        assert!(!row.contains('\n'));
+        assert!(row.contains("Power NL"));
     }
 
     #[test]
