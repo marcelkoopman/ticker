@@ -267,15 +267,18 @@ fn fill_nan_from_prev(df: &mut DataFrame, prev: &DataFrame) -> Result<(), Box<dy
             }
         }
     }
-    let names: Vec<String> = df
-        .column("name")?
-        .str()?
-        .into_iter()
-        .map(|o| o.unwrap_or("").to_string())
-        .collect();
+
+    // Index-based access — Polars 0.55 ChunkedArray does not implement IntoIterator by value/ref the old way.
+    let name_ca = df.column("name")?.str()?;
+    let height = df.height();
+    let mut names: Vec<String> = Vec::with_capacity(height);
+    for i in 0..height {
+        names.push(name_ca.get(i).unwrap_or("").to_string());
+    }
+
     let prices = df.column("price")?.f64()?;
-    let mut out = Vec::with_capacity(df.height());
-    for i in 0..df.height() {
+    let mut out = Vec::with_capacity(height);
+    for i in 0..height {
         let p = prices.get(i).unwrap_or(f64::NAN);
         out.push(if p.is_nan() {
             map.get(&names[i]).copied().unwrap_or(f64::NAN)
