@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuEvent, MenuItem},
 };
 use winit::{
     application::ApplicationHandler,
