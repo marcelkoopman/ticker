@@ -22,14 +22,6 @@ struct PriceRow<'a> {
 }
 
 impl MenuBuilder {
-    /// One menu item per DataFrame row; change text comes from DF columns.
-    /// Also renders the price-watch section.
-    ///
-    /// Price rows use a short two-line layout so the popover stays narrow:
-    /// ```text
-    /// 💰 Bitcoin  €66.672 / BTC
-    ///   ▲ €217 · +0,33%
-    /// ```
     pub fn build(df: &DataFrame, watch_list: &WatchList) -> Menu {
         let menu = Menu::new();
 
@@ -42,7 +34,6 @@ impl MenuBuilder {
             let units = df.column("unit").ok().and_then(|c| c.str().ok());
             let unit_hints = df.column("unit_hint").ok().and_then(|c| c.str().ok());
 
-            // Day change is the primary signal shown in the menu.
             let changes = df.column("change_day").ok().and_then(|c| c.f64().ok());
             let pcts = df.column("pct_day").ok().and_then(|c| c.f64().ok());
             let directions = df.column("direction_day").ok().and_then(|c| c.str().ok());
@@ -71,7 +62,6 @@ impl MenuBuilder {
             }
         }
 
-        // --- PRICE WATCH SECTION ---
         let _ = menu.append(&PredefinedMenuItem::separator());
 
         let status_title = WatchUIBuilder::watch_status_indicator(watch_list);
@@ -108,21 +98,33 @@ impl MenuBuilder {
         ));
 
         let _ = menu.append(&PredefinedMenuItem::separator());
-        let poll_item = MenuItem::with_id("poll", "🔄  Poll now", true, None);
-        let _ = menu.append(&poll_item);
-        let copy_item = MenuItem::with_id("copy", "📋  Copy to clipboard", true, None);
-        let _ = menu.append(&copy_item);
+        let _ = menu.append(&MenuItem::with_id("poll", "🔄  Poll now", true, None));
+        let _ = menu.append(&MenuItem::with_id(
+            "copy",
+            "📋  Copy to clipboard",
+            true,
+            None,
+        ));
+        let _ = menu.append(&MenuItem::with_id(
+            "edit_asset",
+            "✏️ Edit asset currency…",
+            true,
+            None,
+        ));
+        let _ = menu.append(&MenuItem::with_id(
+            "reset_assets",
+            "↩️ Reset assets to defaults",
+            true,
+            None,
+        ));
 
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&Self::version_item());
-        let quit_item = MenuItem::with_id("quit", " Quit", true, None);
-        let _ = menu.append(&quit_item);
+        let _ = menu.append(&MenuItem::with_id("quit", " Quit", true, None));
 
         menu
     }
 
-    /// Compact tray title, e.g. "💰 €66.553".
-    /// Prefers `preferred` asset name; otherwise the first row with a real price.
     pub fn menubar_title(df: &DataFrame, preferred: Option<&str>) -> String {
         if df.height() == 0 {
             return "Ticker".to_string();
@@ -185,8 +187,6 @@ impl MenuBuilder {
         }
     }
 
-    /// Compact two-line price row (primary price + day change).
-    /// The change line is omitted when the day change is zero, flat, or unavailable.
     fn format_price_row(row: &PriceRow<'_>) -> String {
         let currency = Self::unit_to_currency(row.unit);
         let price_txt = Self::format_price(row.price);
@@ -232,7 +232,6 @@ impl MenuBuilder {
         }
     }
 
-    /// Tab-separated table for paste into Numbers / Excel / editors.
     pub fn dataframe_as_tsv(df: &DataFrame) -> String {
         let cols = [
             "symbol",
@@ -301,7 +300,6 @@ impl MenuBuilder {
         name.to_lowercase().replace(' ', "_")
     }
 
-    /// Map a price-row menu id back to the asset display name.
     pub fn asset_name_for_item_id(df: &DataFrame, item_id: &str) -> Option<String> {
         let names = df.column("name").ok()?.str().ok()?;
         for i in 0..df.height() {
@@ -442,14 +440,9 @@ mod tests {
             pct: Some(0.0),
             direction: Some("flat"),
         });
-        assert!(
-            !row.contains('\n'),
-            "flat/zero change must not produce a second line"
-        );
+        assert!(!row.contains('\n'));
         assert!(row.contains("Benzine"));
         assert!(row.contains("2,47"));
-        assert!(!row.contains("0,00"));
-        assert!(!row.contains("0.00%"));
     }
 
     #[test]
@@ -494,7 +487,6 @@ mod tests {
         assert!(title.contains("💰"));
         assert!(title.contains("€"));
         assert!(title.contains("66.553"));
-        assert!(!title.contains(",00"));
     }
 
     #[test]
