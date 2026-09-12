@@ -339,7 +339,10 @@ mod tests {
             pct: Some(0.0),
             direction: Some("flat"),
         });
-        assert!(!row.contains('\n'), "flat/zero change must not produce a second line");
+        assert!(
+            !row.contains('\n'),
+            "flat/zero change must not produce a second line"
+        );
         assert!(row.contains("Benzine"));
         assert!(row.contains("2,47"));
         assert!(!row.contains("0,00"));
