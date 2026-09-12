@@ -9,6 +9,18 @@ const POLARS_VERSION: &str = "0.55.2";
 
 pub struct MenuBuilder;
 
+/// Inputs for a single price menu row (avoids clippy::too_many_arguments).
+struct PriceRow<'a> {
+    symbol: &'a str,
+    name: &'a str,
+    price: f64,
+    unit: &'a str,
+    unit_hint: &'a str,
+    change: Option<f64>,
+    pct: Option<f64>,
+    direction: Option<&'a str>,
+}
+
 impl MenuBuilder {
     /// One menu item per DataFrame row; change text comes from DF columns.
     /// Also renders the price-watch section.
@@ -39,22 +51,17 @@ impl MenuBuilder {
                 (symbols, names, prices, units, unit_hints)
             {
                 for i in 0..df.height() {
-                    let symbol = symbols.get(i).unwrap_or("");
                     let name = names.get(i).unwrap_or("?");
-                    let price = prices.get(i).unwrap_or(f64::NAN);
-                    let unit = units.get(i).unwrap_or("");
-                    let unit_hint = unit_hints.get(i).unwrap_or("");
-
-                    let row = Self::format_price_row(
-                        symbol,
+                    let row = Self::format_price_row(&PriceRow {
+                        symbol: symbols.get(i).unwrap_or(""),
                         name,
-                        price,
-                        unit,
-                        unit_hint,
-                        changes.as_ref().and_then(|c| c.get(i)),
-                        pcts.as_ref().and_then(|c| c.get(i)),
-                        directions.as_ref().and_then(|c| c.get(i)),
-                    );
+                        price: prices.get(i).unwrap_or(f64::NAN),
+                        unit: units.get(i).unwrap_or(""),
+                        unit_hint: unit_hints.get(i).unwrap_or(""),
+                        change: changes.as_ref().and_then(|c| c.get(i)),
+                        pct: pcts.as_ref().and_then(|c| c.get(i)),
+                        direction: directions.as_ref().and_then(|c| c.get(i)),
+                    });
                     let item_id = Self::item_id(name);
                     let item = MenuItem::with_id(&item_id, &row, true, None);
                     let _ = menu.append(&item);
@@ -115,22 +122,13 @@ impl MenuBuilder {
     }
 
     /// Compact two-line price row (primary price + day change).
-    fn format_price_row(
-        symbol: &str,
-        name: &str,
-        price: f64,
-        unit: &str,
-        unit_hint: &str,
-        change: Option<f64>,
-        pct: Option<f64>,
-        direction: Option<&str>,
-    ) -> String {
-        let currency = Self::unit_to_currency(unit);
-        let price_txt = Self::format_price(price);
+    fn format_price_row(row: &PriceRow<'_>) -> String {
+        let currency = Self::unit_to_currency(row.unit);
+        let price_txt = Self::format_price(row.price);
 
         // unit_hint is often "/BTC", "/MWh", etc.
         let unit_part = {
-            let h = unit_hint.trim();
+            let h = row.unit_hint.trim();
             if h.is_empty() {
                 String::new()
             } else if h.starts_with('/') {
@@ -140,10 +138,10 @@ impl MenuBuilder {
             }
         };
 
-        let label = if symbol.is_empty() {
-            name.to_string()
+        let label = if row.symbol.is_empty() {
+            row.name.to_string()
         } else {
-            format!("{} {}", symbol, name)
+            format!("{} {}", row.symbol, row.name)
         };
 
         // Line 1: "💰 Bitcoin  €66.672 / BTC"
@@ -151,25 +149,26 @@ impl MenuBuilder {
 
         // Line 2 uses ▲/▼ (not 🟢/🔴) so the change reads as movement, not a status light.
         // MenuItem titles cannot set a background colour via tray-icon; glyphs carry the signal.
-        let line2 = match (change, pct, direction) {
-            (Some(c), Some(p), Some("up")) => format!(
-                "  ▲ {}{} · +{:.2}%",
-                currency,
-                Self::format_price(c),
-                p
-            ),
-            (Some(c), Some(p), Some("down")) => format!(
-                "  ▼ {}{} · {:.2}%",
-                currency,
-                Self::format_price(c.abs()),
-                p
-            ),
-            (Some(c), Some(p), Some("flat")) => format!(
-                "  · {}{} · {:.2}%",
-                currency,
-                Self::format_price(c.abs()),
-                p
-            ),
+        let line2 = match (row.change, row.pct, row.direction) {
+            (Some(c), Some(p), Some("up")) => {
+                format!("  ▲ {}{} · +{:.2}%", currency, Self::format_price(c), p)
+            }
+            (Some(c), Some(p), Some("down")) => {
+                format!(
+                    "  ▼ {}{} · {:.2}%",
+                    currency,
+                    Self::format_price(c.abs()),
+                    p
+                )
+            }
+            (Some(c), Some(p), Some("flat")) => {
+                format!(
+                    "  · {}{} · {:.2}%",
+                    currency,
+                    Self::format_price(c.abs()),
+                    p
+                )
+            }
             _ => String::new(),
         };
 
@@ -313,16 +312,16 @@ mod tests {
 
     #[test]
     fn format_price_row_two_lines_up() {
-        let row = MenuBuilder::format_price_row(
-            "💰",
-            "Bitcoin",
-            66672.0,
-            "EUR",
-            "/BTC",
-            Some(217.0),
-            Some(0.33),
-            Some("up"),
-        );
+        let row = MenuBuilder::format_price_row(&PriceRow {
+            symbol: "💰",
+            name: "Bitcoin",
+            price: 66672.0,
+            unit: "EUR",
+            unit_hint: "/BTC",
+            change: Some(217.0),
+            pct: Some(0.33),
+            direction: Some("up"),
+        });
         assert!(row.contains('\n'));
         let lines: Vec<_> = row.lines().collect();
         assert_eq!(lines.len(), 2);
