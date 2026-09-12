@@ -5,7 +5,16 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
+    /// Name of the asset shown in the menu-bar title. Defaults to first priced row.
+    #[serde(default)]
+    pub menubar_asset: Option<String>,
     pub assets: Vec<Asset>,
+}
+
+impl Config {
+    pub fn menubar_asset_name(&self) -> Option<&str> {
+        self.menubar_asset.as_deref().filter(|s| !s.is_empty())
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -84,6 +93,14 @@ symbol = "🥇"
         assert_eq!(config.assets[0].symbol, "💰");
         assert_eq!(config.assets[1].name, "Gold");
         assert_eq!(config.assets[1].unit, "EUR");
+        assert!(config.menubar_asset.is_none());
+    }
+
+    #[test]
+    fn parse_config_menubar_asset() {
+        let toml = "menubar_asset = \"Gold\"\n\n[[assets]]\nname = \"Gold\"\nurl = \"https://example.com\"\nprice_path = \"xau.price\"\nunit = \"EUR\"\nunit_hint = \"/oz\"\nsymbol = \"🥇\"\n";
+        let config = parse_config(toml).expect("should parse");
+        assert_eq!(config.menubar_asset_name(), Some("Gold"));
     }
 
     #[test]
