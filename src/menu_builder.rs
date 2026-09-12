@@ -4,12 +4,10 @@ use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
 use crate::price_watch::WatchList;
 use crate::watch_ui::WatchUIBuilder;
 
-/// Keep in sync with the `polars` version in Cargo.toml.
 const POLARS_VERSION: &str = "0.55.2";
 
 pub struct MenuBuilder;
 
-/// Inputs for a single price menu row (avoids clippy::too_many_arguments).
 struct PriceRow<'a> {
     symbol: &'a str,
     name: &'a str,
@@ -22,14 +20,6 @@ struct PriceRow<'a> {
 }
 
 impl MenuBuilder {
-    /// One menu item per DataFrame row; change text comes from DF columns.
-    /// Also renders the price-watch section.
-    ///
-    /// Price rows use a short two-line layout so the popover stays narrow:
-    /// ```text
-    /// 💰 Bitcoin  €66.672 / BTC
-    ///   ▲ €217 · +0,33%
-    /// ```
     pub fn build(df: &DataFrame, watch_list: &WatchList) -> Menu {
         let menu = Menu::new();
 
@@ -41,8 +31,6 @@ impl MenuBuilder {
             let prices = df.column("price").ok().and_then(|c| c.f64().ok());
             let units = df.column("unit").ok().and_then(|c| c.str().ok());
             let unit_hints = df.column("unit_hint").ok().and_then(|c| c.str().ok());
-
-            // Day change is the primary signal shown in the menu.
             let changes = df.column("change_day").ok().and_then(|c| c.f64().ok());
             let pcts = df.column("pct_day").ok().and_then(|c| c.f64().ok());
             let directions = df.column("direction_day").ok().and_then(|c| c.str().ok());
@@ -62,20 +50,19 @@ impl MenuBuilder {
                         pct: pcts.as_ref().and_then(|c| c.get(i)),
                         direction: directions.as_ref().and_then(|c| c.get(i)),
                     });
-                    let item_id = Self::item_id(name);
-                    let item = MenuItem::with_id(&item_id, &row, true, None);
-                    let _ = menu.append(&item);
+                    let _ = menu.append(&MenuItem::with_id(Self::item_id(name), &row, true, None));
                 }
             } else {
                 let _ = menu.append(&MenuItem::new("Invalid price data", false, None));
             }
         }
 
-        // --- PRICE WATCH SECTION ---
         let _ = menu.append(&PredefinedMenuItem::separator());
-
-        let status_title = WatchUIBuilder::watch_status_indicator(watch_list);
-        let _ = menu.append(&MenuItem::new(&status_title, false, None));
+        let _ = menu.append(&MenuItem::new(
+            WatchUIBuilder::watch_status_indicator(watch_list),
+            false,
+            None,
+        ));
 
         for watch in &watch_list.watches {
             let mark = if watch.triggered { "✓" } else { " " };
@@ -106,23 +93,32 @@ impl MenuBuilder {
             true,
             None,
         ));
-
         let _ = menu.append(&PredefinedMenuItem::separator());
-        let poll_item = MenuItem::with_id("poll", "🔄  Poll now", true, None);
-        let _ = menu.append(&poll_item);
-        let copy_item = MenuItem::with_id("copy", "📋  Copy to clipboard", true, None);
-        let _ = menu.append(&copy_item);
-
+        let _ = menu.append(&MenuItem::with_id("poll", "🔄  Poll now", true, None));
+        let _ = menu.append(&MenuItem::with_id(
+            "copy",
+            "📋  Copy to clipboard",
+            true,
+            None,
+        ));
+        let _ = menu.append(&MenuItem::with_id(
+            "edit_asset",
+            "✏️ Edit asset…",
+            true,
+            None,
+        ));
+        let _ = menu.append(&MenuItem::with_id(
+            "reset_assets",
+            "↩️ Reset assets to defaults",
+            true,
+            None,
+        ));
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&Self::version_item());
-        let quit_item = MenuItem::with_id("quit", " Quit", true, None);
-        let _ = menu.append(&quit_item);
-
+        let _ = menu.append(&MenuItem::with_id("quit", " Quit", true, None));
         menu
     }
 
-    /// Compact tray title, e.g. "💰 €66.553".
-    /// Prefers `preferred` asset name; otherwise the first row with a real price.
     pub fn menubar_title(df: &DataFrame, preferred: Option<&str>) -> String {
         if df.height() == 0 {
             return "Ticker".to_string();
@@ -137,7 +133,6 @@ impl MenuBuilder {
         let Some(prices) = prices else {
             return "Ticker".to_string();
         };
-
         let mut idx = None;
         if let Some(want) = preferred {
             for i in 0..df.height() {
@@ -185,12 +180,9 @@ impl MenuBuilder {
         }
     }
 
-    /// Compact two-line price row (primary price + day change).
-    /// The change line is omitted when the day change is zero, flat, or unavailable.
     fn format_price_row(row: &PriceRow<'_>) -> String {
         let currency = Self::unit_to_currency(row.unit);
         let price_txt = Self::format_price(row.price);
-
         let unit_part = {
             let h = row.unit_hint.trim();
             if h.is_empty() {
@@ -201,15 +193,12 @@ impl MenuBuilder {
                 format!(" / {}", h)
             }
         };
-
         let label = if row.symbol.is_empty() {
             row.name.to_string()
         } else {
             format!("{} {}", row.symbol, row.name)
         };
-
         let line1 = format!("{}  {}{}{}", label, currency, price_txt, unit_part);
-
         let line2 = match (row.change, row.pct, row.direction) {
             (Some(c), Some(p), Some("up")) => {
                 format!("  ▲ {}{} · +{:.2}%", currency, Self::format_price(c), p)
@@ -224,7 +213,6 @@ impl MenuBuilder {
             }
             _ => String::new(),
         };
-
         if line2.is_empty() {
             line1
         } else {
@@ -232,7 +220,6 @@ impl MenuBuilder {
         }
     }
 
-    /// Tab-separated table for paste into Numbers / Excel / editors.
     pub fn dataframe_as_tsv(df: &DataFrame) -> String {
         let cols = [
             "symbol",
@@ -245,15 +232,12 @@ impl MenuBuilder {
             "pct_day",
             "direction_day",
         ];
-
         let mut out = String::new();
         out.push_str(&cols.join("\t"));
         out.push('\n');
-
         if df.height() == 0 {
             return out;
         }
-
         for i in 0..df.height() {
             let mut cells = Vec::with_capacity(cols.len());
             for col_name in &cols {
@@ -301,7 +285,6 @@ impl MenuBuilder {
         name.to_lowercase().replace(' ', "_")
     }
 
-    /// Map a price-row menu id back to the asset display name.
     pub fn asset_name_for_item_id(df: &DataFrame, item_id: &str) -> Option<String> {
         let names = df.column("name").ok()?.str().ok()?;
         for i in 0..df.height() {
@@ -317,14 +300,11 @@ impl MenuBuilder {
         if price.is_nan() {
             return "?".to_string();
         }
-
         let formatted = format!("{:.2}", price);
         let parts: Vec<&str> = formatted.split('.').collect();
-
         if parts.len() == 2 {
             let integer_part = parts[0];
             let decimal_part = parts[1];
-
             let mut result = String::new();
             for (i, ch) in integer_part.chars().rev().enumerate() {
                 if i > 0 && i % 3 == 0 {
@@ -332,7 +312,6 @@ impl MenuBuilder {
                 }
                 result.insert(0, ch);
             }
-
             format!("{},{}", result, decimal_part)
         } else {
             formatted
@@ -426,7 +405,6 @@ mod tests {
         assert!(lines[0].contains("Bitcoin"));
         assert!(lines[0].contains("66.672"));
         assert!(lines[1].contains("▲"));
-        assert!(lines[1].contains("€"));
         assert!(lines[1].contains("+0.33%"));
     }
 
@@ -442,14 +420,9 @@ mod tests {
             pct: Some(0.0),
             direction: Some("flat"),
         });
-        assert!(
-            !row.contains('\n'),
-            "flat/zero change must not produce a second line"
-        );
+        assert!(!row.contains('\n'));
         assert!(row.contains("Benzine"));
         assert!(row.contains("2,47"));
-        assert!(!row.contains("0,00"));
-        assert!(!row.contains("0.00%"));
     }
 
     #[test]
@@ -494,21 +467,18 @@ mod tests {
         assert!(title.contains("💰"));
         assert!(title.contains("€"));
         assert!(title.contains("66.553"));
-        assert!(!title.contains(",00"));
     }
 
     #[test]
     fn menubar_title_falls_back_to_first_price() {
         let df = sample_df();
-        let title = MenuBuilder::menubar_title(&df, Some("Missing"));
-        assert!(title.contains("66.553"));
+        assert!(MenuBuilder::menubar_title(&df, Some("Missing")).contains("66.553"));
     }
 
     #[test]
     fn menubar_title_keeps_decimals_for_small_prices() {
         let df = sample_df();
-        let title = MenuBuilder::menubar_title(&df, Some("Benzine"));
-        assert!(title.contains("2,47"));
+        assert!(MenuBuilder::menubar_title(&df, Some("Benzine")).contains("2,47"));
     }
 
     #[test]

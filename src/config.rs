@@ -1,9 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     /// Name of the asset shown in the menu-bar title. Defaults to first priced row.
     #[serde(default)]
@@ -17,7 +17,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Asset {
     pub name: String,
     pub url: String,
@@ -27,7 +27,7 @@ pub struct Asset {
     pub symbol: String,
 }
 
-pub fn config_path() -> Result<PathBuf, Box<dyn Error>> {
+pub fn bundled_config_path() -> Result<PathBuf, Box<dyn Error>> {
     let exe_path = std::env::current_exe()?;
 
     if let Some(app_dir) = exe_path.ancestors().find(|p| {
@@ -42,6 +42,16 @@ pub fn config_path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.toml"))
 }
 
+pub fn user_config_path() -> Result<PathBuf, Box<dyn Error>> {
+    if let Ok(path) = std::env::var("TICKER_USER_CONFIG_PATH")
+        && !path.is_empty()
+    {
+        return Ok(PathBuf::from(path));
+    }
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    Ok(home.join(".ticker_config.toml"))
+}
+
 pub fn parse_config(config_str: &str) -> Result<Config, Box<dyn Error>> {
     toml::from_str(config_str).map_err(|e| e.into())
 }
@@ -54,13 +64,60 @@ pub fn load_config_from(path: &Path) -> Result<Config, Box<dyn Error>> {
 
 pub fn load_config() -> Result<Config, Box<dyn Error>> {
     eprintln!("📋 Looking for config.toml...");
-    let path = config_path()?;
-    eprintln!("📂 Reading config from: {:?}", path);
+    let user = user_config_path()?;
+    let path = if user.exists() {
+        eprintln!("📂 Reading user config from: {:?}", user);
+        user
+    } else {
+        let bundled = bundled_config_path()?;
+        eprintln!("📂 Reading bundled config from: {:?}", bundled);
+        bundled
+    };
     let mut config = load_config_from(&path)?;
     if let Some(pin) = load_menubar_pin() {
         config.menubar_asset = Some(pin);
     }
     Ok(config)
+}
+
+pub fn save_user_config(config: &Config) -> Result<PathBuf, Box<dyn Error>> {
+    let path = user_config_path()?;
+    let body = toml::to_string_pretty(config)?;
+    fs::write(&path, body)?;
+    Ok(path)
+}
+
+pub fn reset_user_config() -> Result<Config, Box<dyn Error>> {
+    let path = user_config_path()?;
+    if path.exists() {
+        fs::remove_file(&path)?;
+    }
+    load_config()
+}
+
+/// Overwrite fetch settings for an asset. URL may be a completely different endpoint.
+pub fn apply_asset_edit(
+    asset: &mut Asset,
+    url: &str,
+    unit: &str,
+    price_path: &str,
+) -> Result<(), String> {
+    let url = url.trim();
+    let unit = unit.trim();
+    let price_path = price_path.trim();
+    if url.is_empty() {
+        return Err("URL cannot be empty".into());
+    }
+    if unit.is_empty() {
+        return Err("Unit cannot be empty".into());
+    }
+    if price_path.is_empty() {
+        return Err("Price path cannot be empty".into());
+    }
+    asset.url = url.to_string();
+    asset.unit = unit.to_uppercase();
+    asset.price_path = price_path.to_string();
+    Ok(())
 }
 
 fn menubar_pin_path() -> Result<PathBuf, Box<dyn Error>> {
@@ -114,6 +171,18 @@ unit = "EUR"
 unit_hint = "/troy oz"
 symbol = "🥇"
 "#
+    }
+
+    fn gecko_btc() -> Asset {
+        Asset {
+            name: "Bitcoin".into(),
+            url: "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=eur"
+                .into(),
+            price_path: "bitcoin.eur".into(),
+            unit: "EUR".into(),
+            unit_hint: "/BTC".into(),
+            symbol: "💰".into(),
+        }
     }
 
     #[test]
@@ -178,8 +247,8 @@ url = "https://example.com"
     }
 
     #[test]
-    fn config_path_returns_some_path() {
-        let path = config_path().expect("should resolve");
+    fn bundled_config_path_returns_some_path() {
+        let path = bundled_config_path().expect("should resolve");
         assert!(path.to_string_lossy().contains("config.toml"));
     }
 
@@ -198,6 +267,56 @@ url = "https://example.com"
         let _ = fs::remove_file(&path);
         unsafe {
             std::env::remove_var("TICKER_MENUBAR_PIN_PATH");
+        }
+    }
+
+    #[test]
+    fn apply_asset_edit_replaces_url_and_unit() {
+        let mut asset = gecko_btc();
+        apply_asset_edit(
+            &mut asset,
+            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
+            "usd",
+            "bitcoin.usd",
+        )
+        .unwrap();
+        assert!(asset.url.contains("vs_currencies=usd"));
+        assert_eq!(asset.unit, "USD");
+        assert_eq!(asset.price_path, "bitcoin.usd");
+    }
+
+    #[test]
+    fn apply_asset_edit_rejects_empty_url() {
+        let mut asset = gecko_btc();
+        assert!(apply_asset_edit(&mut asset, "  ", "USD", "bitcoin.usd").is_err());
+    }
+
+    #[test]
+    fn user_config_roundtrip() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ticker-user-config-{stamp}.toml"));
+        unsafe {
+            std::env::set_var("TICKER_USER_CONFIG_PATH", &path);
+        }
+        let mut config = parse_config(sample_toml()).unwrap();
+        apply_asset_edit(
+            &mut config.assets[0],
+            "https://example.com/btc-usd",
+            "USD",
+            "bitcoin.usd",
+        )
+        .unwrap();
+        save_user_config(&config).unwrap();
+        let loaded = load_config_from(&path).unwrap();
+        assert_eq!(loaded.assets[0].unit, "USD");
+        assert_eq!(loaded.assets[0].url, "https://example.com/btc-usd");
+        reset_user_config().unwrap();
+        assert!(!path.exists());
+        unsafe {
+            std::env::remove_var("TICKER_USER_CONFIG_PATH");
         }
     }
 }

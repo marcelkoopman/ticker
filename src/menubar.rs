@@ -45,10 +45,8 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if !self.config_loaded {
             self.config_loaded = true;
-            eprintln!("Loading config...");
             match load_config() {
                 Ok(config) => {
-                    eprintln!("Config OK ({} assets)", config.assets.len());
                     self.config = Some(config);
                     if let Ok(list) = load_watch_list() {
                         self.watch_list = list;
@@ -78,6 +76,8 @@ impl ApplicationHandler for App {
                 "copy" => self.copy_prices_to_clipboard(),
                 "add_watch" => self.handle_add_watch(),
                 "manage_watches" => self.handle_manage_watches(),
+                "edit_asset" => self.handle_edit_asset(),
+                "reset_assets" => self.handle_reset_assets(),
                 id if id.starts_with("watch_") => {
                     if let Some((asset, price)) = WatchUIBuilder::parse_watch_id(id)
                         && self.watch_list.remove_watch(&asset, price)
@@ -117,6 +117,89 @@ impl App {
             eprintln!("Failed to save menubar pin: {e}");
         }
         self.update_menu();
+    }
+
+    fn handle_edit_asset(&mut self) {
+        let Some(config) = &self.config else {
+            return;
+        };
+        if config.assets.is_empty() {
+            watch_ui::send_macos_notification("Ticker", "No assets in config.");
+            return;
+        }
+        let names: Vec<String> = config.assets.iter().map(|a| a.name.clone()).collect();
+        let list = names
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let pick = format!(
+            "choose from list {{{}}} with prompt \"Asset to edit:\" default items {{\"{}\"}}",
+            list,
+            names.first().cloned().unwrap_or_default()
+        );
+        let asset_name = match run_osascript_output(&pick) {
+            Some(s) if s != "false" => s.trim().to_string(),
+            _ => return,
+        };
+        let Some(current) = config.assets.iter().find(|a| a.name == asset_name).cloned() else {
+            return;
+        };
+
+        let Some(url) = prompt_text(&format!("URL for {asset_name}:"), &current.url) else {
+            return;
+        };
+        let Some(unit) = prompt_text(
+            &format!("Currency / unit for {asset_name} (EUR, USD, GBP, …):"),
+            &current.unit,
+        ) else {
+            return;
+        };
+        let Some(price_path) = prompt_text(
+            &format!("JSON price path for {asset_name}:"),
+            &current.price_path,
+        ) else {
+            return;
+        };
+
+        let apply_result = {
+            let Some(config) = self.config.as_mut() else {
+                return;
+            };
+            let Some(row) = config.assets.iter_mut().find(|a| a.name == asset_name) else {
+                return;
+            };
+            match config::apply_asset_edit(row, &url, &unit, &price_path) {
+                Ok(()) => config::save_user_config(config)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e),
+            }
+        };
+
+        match apply_result {
+            Ok(()) => {
+                watch_ui::send_macos_notification(
+                    "Ticker",
+                    &format!("{asset_name} saved ({unit})"),
+                );
+                self.prices_df = None;
+                self.poll_prices();
+            }
+            Err(e) => watch_ui::send_macos_notification("Ticker", &e),
+        }
+    }
+
+    fn handle_reset_assets(&mut self) {
+        match config::reset_user_config() {
+            Ok(config) => {
+                self.config = Some(config);
+                self.prices_df = None;
+                watch_ui::send_macos_notification("Ticker", "Assets reset to defaults.");
+                self.poll_prices();
+            }
+            Err(e) => watch_ui::send_macos_notification("Ticker", &format!("Reset failed: {e}")),
+        }
     }
 
     fn copy_prices_to_clipboard(&self) {
@@ -208,7 +291,6 @@ impl App {
         } else {
             Vec::new()
         };
-
         if asset_names.is_empty() {
             watch_ui::send_macos_notification(
                 "Ticker",
@@ -216,7 +298,6 @@ impl App {
             );
             return;
         }
-
         let asset_list = asset_names
             .iter()
             .map(|n| format!("\"{}\"", n))
@@ -229,18 +310,13 @@ impl App {
         );
         let asset = match run_osascript_output(&pick_script) {
             Some(s) if s != "false" => s.trim().to_string(),
-            _ => {
-                eprintln!("Add watch cancelled (asset)");
-                return;
-            }
+            _ => return,
         };
-
         let default_price = self
             .prices_df
             .as_ref()
             .and_then(|df| current_price_for(df, &asset))
             .unwrap_or(0.0);
-
         let price_script = format!(
             "text returned of (display dialog \"Target price for {} (€):\" default answer \"{:.2}\" buttons {{\"Cancel\", \"OK\"}} default button \"OK\")",
             asset, default_price
@@ -253,23 +329,15 @@ impl App {
                     return;
                 }
             },
-            None => {
-                eprintln!("Add watch cancelled (price)");
-                return;
-            }
+            None => return,
         };
-
         let direction = match run_osascript_output(
             "choose from list {\"above\", \"below\"} with prompt \"Trigger when price goes:\" default items {\"above\"}",
         ) {
             Some(s) if s.trim() == "below" => WatchDirection::Below,
             Some(s) if s.trim() == "above" => WatchDirection::Above,
-            _ => {
-                eprintln!("Add watch cancelled (direction)");
-                return;
-            }
+            _ => return,
         };
-
         if self
             .watch_list
             .watches
@@ -282,18 +350,9 @@ impl App {
             );
             return;
         }
-
         self.watch_list
             .add_watch(asset.clone(), target_price, direction.clone());
-        if let Err(e) = save_watch_list(&self.watch_list) {
-            eprintln!("Failed to save watches: {}", e);
-        }
-        eprintln!(
-            "Added watch: {} {} €{:.2}",
-            direction.emoji(),
-            asset,
-            target_price
-        );
+        let _ = save_watch_list(&self.watch_list);
         watch_ui::send_macos_notification(
             "Ticker",
             &format!(
@@ -311,7 +370,6 @@ impl App {
             watch_ui::send_macos_notification("Ticker", "No watches configured.");
             return;
         }
-
         let mut lines = String::from("Current watches:\\n");
         for (i, w) in self.watch_list.watches.iter().enumerate() {
             lines.push_str(&format!(
@@ -324,7 +382,6 @@ impl App {
             ));
         }
         lines.push_str("\\nClick a watch in the menu to remove it, or choose Clear All.");
-
         let script = format!(
             "display dialog \"{}\" buttons {{\"Close\", \"Clear All\"}} default button \"Close\"",
             lines
@@ -409,6 +466,19 @@ fn current_price_for(df: &DataFrame, asset: &str) -> Option<f64> {
         }
     }
     None
+}
+
+fn applescript_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn prompt_text(message: &str, default: &str) -> Option<String> {
+    let script = format!(
+        "text returned of (display dialog \"{}\" default answer \"{}\" buttons {{\"Cancel\", \"OK\"}} default button \"OK\")",
+        applescript_escape(message),
+        applescript_escape(default)
+    );
+    run_osascript_output(&script).map(|s| s.trim().to_string())
 }
 
 fn run_osascript_output(script: &str) -> Option<String> {
@@ -504,19 +574,16 @@ pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
     let fetcher = PriceFetcher::new()?;
     let normal_icon = load_icon("normal.png").unwrap_or_else(|_| fallback_icon(255, 255, 255));
     let alert_icon = load_icon("update.png").unwrap_or_else(|_| fallback_icon(255, 80, 80));
-
     let menu = Menu::new();
     let _ = menu.append(&MenuItem::new("⏳ Loading...", false, None));
     let _ = menu.append(&MenuItem::with_id("poll", "🔄 Retry", true, None));
     let _ = menu.append(&MenuItem::with_id("quit", " Quit", true, None));
-
     let tray_icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_icon(normal_icon.clone())
         .with_tooltip("Price Ticker")
         .with_title("Ticker")
         .build()?;
-
     let mut app = App {
         tray: Rc::new(RefCell::new(tray_icon)),
         fetcher: Some(fetcher),
