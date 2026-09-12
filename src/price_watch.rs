@@ -125,6 +125,11 @@ impl WatchList {
 }
 
 fn watch_list_path() -> Result<PathBuf, Box<dyn Error>> {
+    if let Ok(path) = std::env::var("TICKER_WATCHES_PATH")
+        && !path.is_empty()
+    {
+        return Ok(PathBuf::from(path));
+    }
     let home = dirs::home_dir().ok_or("Cannot find home directory")?;
     Ok(home.join(".ticker_watches.json"))
 }
@@ -234,5 +239,59 @@ mod tests {
         assert_eq!(WatchDirection::Below.as_str(), "below");
         assert_eq!(WatchDirection::Above.emoji(), "📈");
         assert_eq!(WatchDirection::Below.emoji(), "📉");
+    }
+
+    #[test]
+    fn test_check_price_exact_target_triggers() {
+        let mut list = WatchList::new();
+        list.add_watch("Bitcoin".to_string(), 70000.0, WatchDirection::Above);
+        let triggered = list.check_price("Bitcoin", 70000.0);
+        assert_eq!(triggered.len(), 1);
+        assert!(list.watches[0].triggered);
+
+        let mut list = WatchList::new();
+        list.add_watch("Bitcoin".to_string(), 65000.0, WatchDirection::Below);
+        let triggered = list.check_price("Bitcoin", 65000.0);
+        assert_eq!(triggered.len(), 1);
+    }
+
+    #[test]
+    fn test_check_price_just_shy_of_target_does_not_fire() {
+        let mut list = WatchList::new();
+        list.add_watch("Bitcoin".to_string(), 70000.0, WatchDirection::Above);
+        let triggered = list.check_price("Bitcoin", 69999.99);
+        assert!(triggered.is_empty());
+        assert!(!list.watches[0].triggered);
+    }
+
+    #[test]
+    fn test_check_price_other_asset_ignored() {
+        let mut list = WatchList::new();
+        list.add_watch("Bitcoin".to_string(), 70000.0, WatchDirection::Above);
+        let triggered = list.check_price("Gold", 80000.0);
+        assert!(triggered.is_empty());
+        assert!(!list.watches[0].triggered);
+    }
+
+    #[test]
+    fn test_remove_watch_near_miss_tolerance() {
+        let mut list = WatchList::new();
+        list.add_watch("Bitcoin".to_string(), 70000.0, WatchDirection::Above);
+        assert!(!list.remove_watch("Bitcoin", 70000.02));
+        assert_eq!(list.watches.len(), 1);
+        assert!(list.remove_watch("Bitcoin", 70000.005));
+        assert!(list.watches.is_empty());
+    }
+
+    #[test]
+    fn watch_list_json_roundtrip() {
+        let mut list = WatchList::new();
+        list.add_watch("Gold".to_string(), 2100.5, WatchDirection::Below);
+        let json = serde_json::to_string(&list).unwrap();
+        let loaded: WatchList = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.watches.len(), 1);
+        assert_eq!(loaded.watches[0].asset_name, "Gold");
+        assert_eq!(loaded.watches[0].direction, WatchDirection::Below);
+        assert!((loaded.watches[0].target_price - 2100.5).abs() < f64::EPSILON);
     }
 }
