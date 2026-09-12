@@ -50,7 +50,7 @@ impl MenuBuilder {
                         pct: pcts.as_ref().and_then(|c| c.get(i)),
                         direction: directions.as_ref().and_then(|c| c.get(i)),
                     });
-                    let _ = menu.append(&MenuItem::with_id(&Self::item_id(name), &row, true, None));
+                    let _ = menu.append(&MenuItem::with_id(Self::item_id(name), &row, true, None));
                 }
             } else {
                 let _ = menu.append(&MenuItem::new("Invalid price data", false, None));
@@ -59,7 +59,7 @@ impl MenuBuilder {
 
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&MenuItem::new(
-            &WatchUIBuilder::watch_status_indicator(watch_list),
+            WatchUIBuilder::watch_status_indicator(watch_list),
             false,
             None,
         ));
