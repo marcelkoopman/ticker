@@ -191,7 +191,6 @@ impl MenuBuilder {
         let currency = Self::unit_to_currency(row.unit);
         let price_txt = Self::format_price(row.price);
 
-        // unit_hint is often "/BTC", "/MWh", etc.
         let unit_part = {
             let h = row.unit_hint.trim();
             if h.is_empty() {
@@ -209,13 +208,8 @@ impl MenuBuilder {
             format!("{} {}", row.symbol, row.name)
         };
 
-        // Line 1: "💰 Bitcoin  €66.672 / BTC"
         let line1 = format!("{}  {}{}{}", label, currency, price_txt, unit_part);
 
-        // Line 2 uses ▲/▼ (not 🟢/🔴) so the change reads as movement, not a status light.
-        // MenuItem titles cannot set a background colour via tray-icon; glyphs carry the signal.
-        // Hide the change entirely when it is zero / flat / unavailable so the menu does not
-        // show a dead "· €0,00 · 0.00%" for assets that do not move often (fuel, power, …).
         let line2 = match (row.change, row.pct, row.direction) {
             (Some(c), Some(p), Some("up")) => {
                 format!("  ▲ {}{} · +{:.2}%", currency, Self::format_price(c), p)
@@ -307,6 +301,18 @@ impl MenuBuilder {
         name.to_lowercase().replace(' ', "_")
     }
 
+    /// Map a price-row menu id back to the asset display name.
+    pub fn asset_name_for_item_id(df: &DataFrame, item_id: &str) -> Option<String> {
+        let names = df.column("name").ok()?.str().ok()?;
+        for i in 0..df.height() {
+            let name = names.get(i)?;
+            if Self::item_id(name) == item_id {
+                return Some(name.to_string());
+            }
+        }
+        None
+    }
+
     fn format_price(price: f64) -> String {
         if price.is_nan() {
             return "?".to_string();
@@ -382,6 +388,20 @@ mod tests {
     #[test]
     fn item_id_normalizes_name() {
         assert_eq!(MenuBuilder::item_id("TTF Gas"), "ttf_gas");
+    }
+
+    #[test]
+    fn asset_name_for_item_id_roundtrip() {
+        let df = sample_df();
+        assert_eq!(
+            MenuBuilder::asset_name_for_item_id(&df, "bitcoin").as_deref(),
+            Some("Bitcoin")
+        );
+        assert_eq!(
+            MenuBuilder::asset_name_for_item_id(&df, "benzine").as_deref(),
+            Some("Benzine")
+        );
+        assert_eq!(MenuBuilder::asset_name_for_item_id(&df, "poll"), None);
     }
 
     #[test]
