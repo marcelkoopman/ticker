@@ -155,9 +155,10 @@ impl App {
         ) else {
             return;
         };
-        let Some(price_path) =
-            prompt_text(&format!("JSON price path for {asset_name}:"), &current.price_path)
-        else {
+        let Some(price_path) = prompt_text(
+            &format!("JSON price path for {asset_name}:"),
+            &current.price_path,
+        ) else {
             return;
         };
 
