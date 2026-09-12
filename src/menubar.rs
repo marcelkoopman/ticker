@@ -333,17 +333,8 @@ impl App {
     }
 
     fn has_alert(&self) -> bool {
-        if self.watch_list.watches.iter().any(|w| w.triggered) {
-            return true;
-        }
-        let Some(df) = &self.prices_df else {
-            return false;
-        };
-        let Ok(col) = df.column("direction_day") else {
-            return false;
-        };
-        let Ok(ca) = col.str() else { return false };
-        (0..df.height()).any(|i| matches!(ca.get(i), Some("up") | Some("down")))
+        // Show update.png only after a watch notification has fired.
+        self.watch_list.watches.iter().any(|w| w.triggered)
     }
 
     fn update_menu(&self) {
