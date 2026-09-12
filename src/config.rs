@@ -42,15 +42,6 @@ pub fn bundled_config_path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.toml"))
 }
 
-/// Kept for older call sites / tests.
-pub fn config_path() -> Result<PathBuf, Box<dyn Error>> {
-    if user_config_path()?.exists() {
-        user_config_path()
-    } else {
-        bundled_config_path()
-    }
-}
-
 pub fn user_config_path() -> Result<PathBuf, Box<dyn Error>> {
     if let Ok(path) = std::env::var("TICKER_USER_CONFIG_PATH")
         && !path.is_empty()
@@ -256,8 +247,8 @@ url = "https://example.com"
     }
 
     #[test]
-    fn config_path_returns_some_path() {
-        let path = config_path().expect("should resolve");
+    fn bundled_config_path_returns_some_path() {
+        let path = bundled_config_path().expect("should resolve");
         assert!(path.to_string_lossy().contains("config.toml"));
     }
 
