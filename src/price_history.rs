@@ -27,6 +27,9 @@ struct PriceHistoryFile {
     /// Day-open prices (name → day open).
     #[serde(default)]
     day_opens: HashMap<String, DayOpen>,
+    /// Price watches: asset name → threshold. Alert when current price goes above this value.
+    #[serde(default)]
+    watches: HashMap<String, f64>,
 }
 
 fn price_history_path() -> PathBuf {
@@ -114,6 +117,53 @@ pub fn save_price_history_to(
     save_file(path, &file)
 }
 
+/// Load all price watches (name → threshold above which to alert).
+pub fn load_watches() -> HashMap<String, f64> {
+    load_watches_from(&price_history_path())
+}
+
+pub fn load_watches_from(path: &Path) -> HashMap<String, f64> {
+    let file = load_file(path);
+    file.watches
+}
+
+/// Set or update a watch threshold for an asset. Pass `None` to clear.
+pub fn set_watch(name: &str, threshold: Option<f64>) -> Result<(), Box<dyn Error>> {
+    set_watch_to(&price_history_path(), name, threshold)
+}
+
+pub fn set_watch_to(
+    path: &Path,
+    name: &str,
+    threshold: Option<f64>,
+) -> Result<(), Box<dyn Error>> {
+    let mut file = load_file(path);
+    match threshold {
+        Some(v) if !v.is_nan() && v > 0.0 => {
+            file.watches.insert(name.to_string(), v);
+        }
+        _ => {
+            file.watches.remove(name);
+        }
+    }
+    save_file(path, &file)
+}
+
+/// Replace all watches at once.
+pub fn save_watches(watches: &HashMap<String, f64>) -> Result<(), Box<dyn Error>> {
+    save_watches_to(&price_history_path(), watches)
+}
+
+pub fn save_watches_to(path: &Path, watches: &HashMap<String, f64>) -> Result<(), Box<dyn Error>> {
+    let mut file = load_file(path);
+    file.watches = watches
+        .iter()
+        .filter(|(_, v)| !v.is_nan() && **v > 0.0)
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+    save_file(path, &file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +194,34 @@ mod tests {
         let _ = fs::remove_file(&path);
         let loaded = load_day_opens_from(&path);
         assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn watch_set_and_clear() {
+        let path = temp_path("watch_set_clear");
+        let _ = fs::remove_file(&path);
+
+        set_watch_to(&path, "Bitcoin", Some(100_000.0)).unwrap();
+        let loaded = load_watches_from(&path);
+        assert_eq!(loaded.get("Bitcoin"), Some(&100_000.0));
+
+        set_watch_to(&path, "Bitcoin", None).unwrap();
+        let loaded = load_watches_from(&path);
+        assert!(!loaded.contains_key("Bitcoin"));
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn watch_ignores_invalid() {
+        let path = temp_path("watch_invalid");
+        let _ = fs::remove_file(&path);
+
+        set_watch_to(&path, "Gold", Some(f64::NAN)).unwrap();
+        set_watch_to(&path, "Gas", Some(0.0)).unwrap();
+        let loaded = load_watches_from(&path);
+        assert!(loaded.is_empty());
+
+        let _ = fs::remove_file(&path);
     }
 }
