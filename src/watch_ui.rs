@@ -62,11 +62,7 @@ impl WatchUIBuilder {
             "🔔 {} Price Alert!\n\n\
              {} has {} your watch price of €{:.2}\n\n\
              Current Price: €{:.2}",
-            watch.asset_name,
-            watch.asset_name,
-            direction_text,
-            watch.target_price,
-            current_price
+            watch.asset_name, watch.asset_name, direction_text, watch.target_price, current_price
         )
     }
 
@@ -116,8 +112,7 @@ impl WatchUIBuilder {
 pub fn send_macos_notification(title: &str, message: &str) {
     use std::process::Command;
 
-    let escape_applescript_string =
-        |value: &str| value.replace('\\', "\\\\").replace('"', "\\\"");
+    let escape_applescript_string = |value: &str| value.replace('\\', "\\\\").replace('"', "\\\"");
 
     let escaped_title = escape_applescript_string(title);
     let escaped_message = escape_applescript_string(message);
@@ -127,9 +122,7 @@ pub fn send_macos_notification(title: &str, message: &str) {
         escaped_message, escaped_title
     );
 
-    let _ = Command::new("osascript")
-        .args(["-e", &script])
-        .status();
+    let _ = Command::new("osascript").args(["-e", &script]).status();
 }
 
 /// No-op notification implementation on non-macOS platforms.
