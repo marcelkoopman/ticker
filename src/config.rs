@@ -1,9 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     /// Name of the asset shown in the menu-bar title. Defaults to first priced row.
     #[serde(default)]
@@ -17,7 +17,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Asset {
     pub name: String,
     pub url: String,
@@ -27,7 +27,7 @@ pub struct Asset {
     pub symbol: String,
 }
 
-pub fn config_path() -> Result<PathBuf, Box<dyn Error>> {
+pub fn bundled_config_path() -> Result<PathBuf, Box<dyn Error>> {
     let exe_path = std::env::current_exe()?;
 
     if let Some(app_dir) = exe_path.ancestors().find(|p| {
@@ -42,6 +42,25 @@ pub fn config_path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.toml"))
 }
 
+/// Kept for older call sites / tests.
+pub fn config_path() -> Result<PathBuf, Box<dyn Error>> {
+    if user_config_path()?.exists() {
+        user_config_path()
+    } else {
+        bundled_config_path()
+    }
+}
+
+pub fn user_config_path() -> Result<PathBuf, Box<dyn Error>> {
+    if let Ok(path) = std::env::var("TICKER_USER_CONFIG_PATH")
+        && !path.is_empty()
+    {
+        return Ok(PathBuf::from(path));
+    }
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    Ok(home.join(".ticker_config.toml"))
+}
+
 pub fn parse_config(config_str: &str) -> Result<Config, Box<dyn Error>> {
     toml::from_str(config_str).map_err(|e| e.into())
 }
@@ -54,13 +73,81 @@ pub fn load_config_from(path: &Path) -> Result<Config, Box<dyn Error>> {
 
 pub fn load_config() -> Result<Config, Box<dyn Error>> {
     eprintln!("📋 Looking for config.toml...");
-    let path = config_path()?;
-    eprintln!("📂 Reading config from: {:?}", path);
+    let user = user_config_path()?;
+    let path = if user.exists() {
+        eprintln!("📂 Reading user config from: {:?}", user);
+        user
+    } else {
+        let bundled = bundled_config_path()?;
+        eprintln!("📂 Reading bundled config from: {:?}", bundled);
+        bundled
+    };
     let mut config = load_config_from(&path)?;
     if let Some(pin) = load_menubar_pin() {
         config.menubar_asset = Some(pin);
     }
     Ok(config)
+}
+
+pub fn save_user_config(config: &Config) -> Result<PathBuf, Box<dyn Error>> {
+    let path = user_config_path()?;
+    let body = toml::to_string_pretty(config)?;
+    fs::write(&path, body)?;
+    Ok(path)
+}
+
+pub fn reset_user_config() -> Result<Config, Box<dyn Error>> {
+    let path = user_config_path()?;
+    if path.exists() {
+        fs::remove_file(&path)?;
+    }
+    load_config()
+}
+
+/// Switch a fetchable asset to EUR / USD / GBP by rewriting its URL and unit.
+/// Fuel and power feeds are source-locked and return an error.
+pub fn apply_quote_currency(asset: &mut Asset, code: &str) -> Result<(), String> {
+    let code = code.trim().to_uppercase();
+    let lower = code.to_lowercase();
+    if !matches!(code.as_str(), "EUR" | "USD" | "GBP") {
+        return Err(format!("Unsupported currency {code}"));
+    }
+
+    if asset.url.contains("coingecko.com") {
+        asset.url = replace_query_value(&asset.url, "vs_currencies", &lower);
+        if let Some((head, _)) = asset.price_path.rsplit_once('.') {
+            asset.price_path = format!("{head}.{lower}");
+        }
+        asset.unit = code;
+        return Ok(());
+    }
+
+    if asset.url.contains("xaus.com") {
+        asset.url = replace_query_value(&asset.url, "currency", &code);
+        asset.unit = code;
+        return Ok(());
+    }
+
+    Err(format!(
+        "{} is only available in {}",
+        asset.name, asset.unit
+    ))
+}
+
+fn replace_query_value(url: &str, key: &str, value: &str) -> String {
+    let needle = format!("{key}=");
+    if let Some(start) = url.find(&needle) {
+        let val_start = start + needle.len();
+        let val_end = url[val_start..]
+            .find('&')
+            .map(|i| val_start + i)
+            .unwrap_or(url.len());
+        format!("{}{}{}", &url[..val_start], value, &url[val_end..])
+    } else if url.contains('?') {
+        format!("{url}&{key}={value}")
+    } else {
+        format!("{url}?{key}={value}")
+    }
 }
 
 fn menubar_pin_path() -> Result<PathBuf, Box<dyn Error>> {
@@ -114,6 +201,18 @@ unit = "EUR"
 unit_hint = "/troy oz"
 symbol = "🥇"
 "#
+    }
+
+    fn gecko_btc() -> Asset {
+        Asset {
+            name: "Bitcoin".into(),
+            url: "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=eur"
+                .into(),
+            price_path: "bitcoin.eur".into(),
+            unit: "EUR".into(),
+            unit_hint: "/BTC".into(),
+            symbol: "💰".into(),
+        }
     }
 
     #[test]
@@ -198,6 +297,67 @@ url = "https://example.com"
         let _ = fs::remove_file(&path);
         unsafe {
             std::env::remove_var("TICKER_MENUBAR_PIN_PATH");
+        }
+    }
+
+    #[test]
+    fn apply_quote_currency_coingecko_usd() {
+        let mut asset = gecko_btc();
+        apply_quote_currency(&mut asset, "usd").unwrap();
+        assert!(asset.url.contains("vs_currencies=usd"));
+        assert!(!asset.url.contains("vs_currencies=eur"));
+        assert_eq!(asset.price_path, "bitcoin.usd");
+        assert_eq!(asset.unit, "USD");
+    }
+
+    #[test]
+    fn apply_quote_currency_xaus() {
+        let mut asset = Asset {
+            name: "Gold".into(),
+            url: "https://xaus.com/api/v1/spot?currency=EUR".into(),
+            price_path: "xau.price".into(),
+            unit: "EUR".into(),
+            unit_hint: "/troy oz".into(),
+            symbol: "🥇".into(),
+        };
+        apply_quote_currency(&mut asset, "GBP").unwrap();
+        assert!(asset.url.contains("currency=GBP"));
+        assert_eq!(asset.unit, "GBP");
+    }
+
+    #[test]
+    fn apply_quote_currency_rejects_locked_feed() {
+        let mut asset = Asset {
+            name: "Benzine".into(),
+            url: "https://eurooilwatch.com/api/v1/prices".into(),
+            price_path: "countries.countryCode=NL.petrolPrice".into(),
+            unit: "EUR".into(),
+            unit_hint: "/L".into(),
+            symbol: "⛽".into(),
+        };
+        assert!(apply_quote_currency(&mut asset, "USD").is_err());
+        assert_eq!(asset.unit, "EUR");
+    }
+
+    #[test]
+    fn user_config_roundtrip() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ticker-user-config-{stamp}.toml"));
+        unsafe {
+            std::env::set_var("TICKER_USER_CONFIG_PATH", &path);
+        }
+        let mut config = parse_config(sample_toml()).unwrap();
+        apply_quote_currency(&mut config.assets[0], "USD").unwrap();
+        save_user_config(&config).unwrap();
+        let loaded = load_config_from(&path).unwrap();
+        assert_eq!(loaded.assets[0].unit, "USD");
+        reset_user_config().unwrap();
+        assert!(!path.exists());
+        unsafe {
+            std::env::remove_var("TICKER_USER_CONFIG_PATH");
         }
     }
 }
