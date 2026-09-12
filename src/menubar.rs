@@ -78,6 +78,8 @@ impl ApplicationHandler for App {
                 "copy" => self.copy_prices_to_clipboard(),
                 "add_watch" => self.handle_add_watch(),
                 "manage_watches" => self.handle_manage_watches(),
+                "edit_asset" => self.handle_edit_asset(),
+                "reset_assets" => self.handle_reset_assets(),
                 id if id.starts_with("watch_") => {
                     if let Some((asset, price)) = WatchUIBuilder::parse_watch_id(id)
                         && self.watch_list.remove_watch(&asset, price)
@@ -117,6 +119,74 @@ impl App {
             eprintln!("Failed to save menubar pin: {e}");
         }
         self.update_menu();
+    }
+
+    fn handle_edit_asset(&mut self) {
+        let Some(config) = &self.config else {
+            return;
+        };
+        if config.assets.is_empty() {
+            watch_ui::send_macos_notification("Ticker", "No assets in config.");
+            return;
+        }
+        let names: Vec<String> = config.assets.iter().map(|a| a.name.clone()).collect();
+        let list = names
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let pick = format!(
+            "choose from list {{{}}} with prompt \"Asset to edit:\" default items {{\"{}\"}}",
+            list,
+            names.first().cloned().unwrap_or_default()
+        );
+        let asset = match run_osascript_output(&pick) {
+            Some(s) if s != "false" => s.trim().to_string(),
+            _ => return,
+        };
+        let currency = match run_osascript_output(
+            "choose from list {\"EUR\", \"USD\", \"GBP\"} with prompt \"Quote currency:\" default items {\"USD\"}",
+        ) {
+            Some(s) if s != "false" => s.trim().to_string(),
+            _ => return,
+        };
+
+        let apply_result = {
+            let Some(config) = self.config.as_mut() else {
+                return;
+            };
+            let Some(row) = config.assets.iter_mut().find(|a| a.name == asset) else {
+                return;
+            };
+            match config::apply_quote_currency(row, &currency) {
+                Ok(()) => config::save_user_config(config).map(|_| ()).map_err(|e| e.to_string()),
+                Err(e) => Err(e),
+            }
+        };
+
+        match apply_result {
+            Ok(()) => {
+                watch_ui::send_macos_notification(
+                    "Ticker",
+                    &format!("{asset} now quoted in {currency}"),
+                );
+                self.prices_df = None;
+                self.poll_prices();
+            }
+            Err(e) => watch_ui::send_macos_notification("Ticker", &e),
+        }
+    }
+
+    fn handle_reset_assets(&mut self) {
+        match config::reset_user_config() {
+            Ok(config) => {
+                self.config = Some(config);
+                self.prices_df = None;
+                watch_ui::send_macos_notification("Ticker", "Assets reset to defaults.");
+                self.poll_prices();
+            }
+            Err(e) => watch_ui::send_macos_notification("Ticker", &format!("Reset failed: {e}")),
+        }
     }
 
     fn copy_prices_to_clipboard(&self) {
@@ -288,12 +358,6 @@ impl App {
         if let Err(e) = save_watch_list(&self.watch_list) {
             eprintln!("Failed to save watches: {}", e);
         }
-        eprintln!(
-            "Added watch: {} {} €{:.2}",
-            direction.emoji(),
-            asset,
-            target_price
-        );
         watch_ui::send_macos_notification(
             "Ticker",
             &format!(
