@@ -19,7 +19,8 @@ use crate::config::load_config;
 use crate::menu_builder::MenuBuilder;
 use crate::price_fetcher::PriceFetcher;
 use crate::price_history;
-use crate::price_watch::{load_watch_list, save_watch_list, WatchList};
+use crate::price_watch::{load_watch_list, save_watch_list, WatchDirection, WatchList};
+use std::process::Command;
 use crate::watch_ui::{self, WatchUIBuilder};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -76,19 +77,8 @@ impl ApplicationHandler for App {
                     }
                 }
                 "copy" => self.copy_prices_to_clipboard(),
-                "add_watch" => {
-                    watch_ui::send_macos_notification(
-                        "Ticker",
-                        "Add a watch from Terminal:\nticker add Bitcoin 68000 above",
-                    );
-                }
-                "manage_watches" => {
-                    let n = self.watch_list.watches.len();
-                    watch_ui::send_macos_notification(
-                        "Ticker",
-                        &format!("{n} watch(es). List: ticker list | Clear: ticker clear\nClick a watch row in the menu to remove it."),
-                    );
-                }
+                "add_watch" => self.handle_add_watch(),
+                "manage_watches" => self.handle_manage_watches(),
                 id if id.starts_with("watch_") => {
                     if let Some((asset, price)) = WatchUIBuilder::parse_watch_id(id) {
                         if self.watch_list.remove_watch(&asset, price) {
@@ -194,6 +184,151 @@ impl App {
         self.update_menu();
     }
 
+    fn handle_add_watch(&mut self) {
+        let asset_names: Vec<String> = if let Some(df) = &self.prices_df {
+            df.column("name")
+                .ok()
+                .and_then(|c| c.str().ok())
+                .map(|ca| {
+                    (0..df.height())
+                        .filter_map(|i| ca.get(i).map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        if asset_names.is_empty() {
+            watch_ui::send_macos_notification(
+                "Ticker",
+                "No prices loaded yet. Press Poll now first.",
+            );
+            return;
+        }
+
+        let asset_list = asset_names
+            .iter()
+            .map(|n| format!("\"{}\"", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let pick_script = format!(
+            "choose from list {{{}}} with prompt \"Select asset for price watch:\" default items {{\"{}\"}}",
+            asset_list,
+            asset_names.first().cloned().unwrap_or_default()
+        );
+        let asset = match run_osascript_output(&pick_script) {
+            Some(s) if s != "false" => s.trim().to_string(),
+            _ => {
+                eprintln!("Add watch cancelled (asset)");
+                return;
+            }
+        };
+
+        let default_price = self
+            .prices_df
+            .as_ref()
+            .and_then(|df| current_price_for(df, &asset))
+            .unwrap_or(0.0);
+
+        let price_script = format!(
+            "text returned of (display dialog \"Target price for {} (€):\" default answer \"{:.2}\" buttons {{\"Cancel\", \"OK\"}} default button \"OK\")",
+            asset, default_price
+        );
+        let target_price: f64 = match run_osascript_output(&price_script) {
+            Some(s) => match s.trim().replace(',', ".").parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    watch_ui::send_macos_notification("Ticker", "Invalid price entered.");
+                    return;
+                }
+            },
+            None => {
+                eprintln!("Add watch cancelled (price)");
+                return;
+            }
+        };
+
+        let direction = match run_osascript_output(
+            "choose from list {\"above\", \"below\"} with prompt \"Trigger when price goes:\" default items {\"above\"}",
+        ) {
+            Some(s) if s.trim() == "below" => WatchDirection::Below,
+            Some(s) if s.trim() == "above" => WatchDirection::Above,
+            _ => {
+                eprintln!("Add watch cancelled (direction)");
+                return;
+            }
+        };
+
+        if self
+            .watch_list
+            .watches
+            .iter()
+            .any(|w| w.asset_name == asset && (w.target_price - target_price).abs() < 0.01)
+        {
+            watch_ui::send_macos_notification(
+                "Ticker",
+                &format!("Watch already exists for {} at €{:.2}", asset, target_price),
+            );
+            return;
+        }
+
+        self.watch_list
+            .add_watch(asset.clone(), target_price, direction.clone());
+        if let Err(e) = save_watch_list(&self.watch_list) {
+            eprintln!("Failed to save watches: {}", e);
+        }
+        eprintln!(
+            "Added watch: {} {} €{:.2}",
+            direction.emoji(),
+            asset,
+            target_price
+        );
+        watch_ui::send_macos_notification(
+            "Ticker",
+            &format!(
+                "Watch set: {} {} €{:.2}",
+                direction.emoji(),
+                asset,
+                target_price
+            ),
+        );
+        self.update_menu();
+    }
+
+    fn handle_manage_watches(&mut self) {
+        if self.watch_list.watches.is_empty() {
+            watch_ui::send_macos_notification("Ticker", "No watches configured.");
+            return;
+        }
+
+        let mut lines = String::from("Current watches:\\n");
+        for (i, w) in self.watch_list.watches.iter().enumerate() {
+            lines.push_str(&format!(
+                "{}. {} {} €{:.2}{}\\n",
+                i + 1,
+                w.direction.emoji(),
+                w.asset_name,
+                w.target_price,
+                if w.triggered { " ✓" } else { "" }
+            ));
+        }
+        lines.push_str("\\nClick a watch in the menu to remove it, or choose Clear All.");
+
+        let script = format!(
+            "display dialog \"{}\" buttons {{\"Close\", \"Clear All\"}} default button \"Close\"",
+            lines
+        );
+        if let Some(btn) = run_osascript_button(&script)
+            && btn.contains("Clear All")
+        {
+            self.watch_list = WatchList::new();
+            let _ = save_watch_list(&self.watch_list);
+            watch_ui::send_macos_notification("Ticker", "All watches cleared.");
+            self.update_menu();
+        }
+    }
+
     fn schedule_next_poll(&mut self) {
         self.next_check = SystemTime::now() + POLL_INTERVAL;
     }
@@ -256,6 +391,41 @@ impl App {
     }
 }
 
+fn current_price_for(df: &DataFrame, asset: &str) -> Option<f64> {
+    let names = df.column("name").ok()?.str().ok()?;
+    let prices = df.column("price").ok()?.f64().ok()?;
+    for i in 0..df.height() {
+        if names.get(i) == Some(asset) {
+            let p = prices.get(i)?;
+            if !p.is_nan() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn run_osascript_output(script: &str) -> Option<String> {
+    let output = Command::new("osascript").args(["-e", script]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn run_osascript_button(script: &str) -> Option<String> {
+    let output = Command::new("osascript").args(["-e", script]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 fn fill_nan_from_prev(df: &mut DataFrame, prev: &DataFrame) -> Result<(), Box<dyn std::error::Error>> {
     let pn = prev.column("name")?.str()?;
     let pp = prev.column("price")?.f64()?;
@@ -267,15 +437,12 @@ fn fill_nan_from_prev(df: &mut DataFrame, prev: &DataFrame) -> Result<(), Box<dy
             }
         }
     }
-
-    // Index-based access — Polars 0.55 ChunkedArray does not implement IntoIterator by value/ref the old way.
     let name_ca = df.column("name")?.str()?;
     let height = df.height();
     let mut names: Vec<String> = Vec::with_capacity(height);
     for i in 0..height {
         names.push(name_ca.get(i).unwrap_or("").to_string());
     }
-
     let prices = df.column("price")?.f64()?;
     let mut out = Vec::with_capacity(height);
     for i in 0..height {
