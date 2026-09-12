@@ -16,7 +16,7 @@ impl MenuBuilder {
     /// Price rows use a short two-line layout so the popover stays narrow:
     /// ```text
     /// 💰 Bitcoin  €66.672 / BTC
-    ///             +€217 · +0,33%
+    ///   ▲ €217 · +0,33%
     /// ```
     pub fn build(df: &DataFrame, watch_list: &WatchList) -> Menu {
         let menu = Menu::new();
@@ -149,22 +149,23 @@ impl MenuBuilder {
         // Line 1: "💰 Bitcoin  €66.672 / BTC"
         let line1 = format!("{}  {}{}{}", label, currency, price_txt, unit_part);
 
-        // Line 2: "  +€217 · +0,33%"  (indented; empty when no change data)
+        // Line 2 uses ▲/▼ (not 🟢/🔴) so the change reads as movement, not a status light.
+        // MenuItem titles cannot set a background colour via tray-icon; glyphs carry the signal.
         let line2 = match (change, pct, direction) {
             (Some(c), Some(p), Some("up")) => format!(
-                "  +{}{} · +{:.2}%",
+                "  ▲ {}{} · +{:.2}%",
                 currency,
                 Self::format_price(c),
                 p
             ),
             (Some(c), Some(p), Some("down")) => format!(
-                "  −{}{} · {:.2}%",
+                "  ▼ {}{} · {:.2}%",
                 currency,
                 Self::format_price(c.abs()),
                 p
             ),
             (Some(c), Some(p), Some("flat")) => format!(
-                "  {}{} · {:.2}%",
+                "  · {}{} · {:.2}%",
                 currency,
                 Self::format_price(c.abs()),
                 p
@@ -327,7 +328,8 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("Bitcoin"));
         assert!(lines[0].contains("66.672"));
-        assert!(lines[1].contains("+€"));
+        assert!(lines[1].contains("▲"));
+        assert!(lines[1].contains("€"));
         assert!(lines[1].contains("+0.33%"));
     }
 
