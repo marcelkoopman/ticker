@@ -341,6 +341,8 @@ impl App {
         let empty = Self::empty_df();
         let df = self.prices_df.clone().unwrap_or(empty);
         let menu = MenuBuilder::build(&df, &self.watch_list);
+        let pin = self.config.as_ref().and_then(|c| c.menubar_asset_name());
+        let title = MenuBuilder::menubar_title(&df, pin);
         if let Ok(tray) = self.tray.try_borrow_mut() {
             tray.set_menu(Some(Box::new(menu)));
             let icon = if self.has_alert() {
@@ -349,7 +351,7 @@ impl App {
                 self.normal_icon.clone()
             };
             let _ = tray.set_icon(Some(icon));
-            tray.set_title(Some("Ticker"));
+            tray.set_title(Some(&title));
         }
     }
 
