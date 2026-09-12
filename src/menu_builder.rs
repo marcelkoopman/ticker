@@ -1,5 +1,6 @@
 use polars::prelude::*;
 use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
+
 use crate::price_watch::WatchList;
 use crate::watch_ui::WatchUIBuilder;
 
@@ -10,6 +11,7 @@ pub struct MenuBuilder;
 
 impl MenuBuilder {
     /// One menu item per DataFrame row; change text comes from DF columns.
+    /// Also renders the price-watch section.
     pub fn build(df: &DataFrame, watch_list: &WatchList) -> Menu {
         let menu = Menu::new();
 
@@ -85,7 +87,7 @@ impl MenuBuilder {
             }
         }
 
-        // --- PRICE WATCH SECTIE ---
+        // --- PRICE WATCH SECTION ---
         let _ = menu.append(&PredefinedMenuItem::separator());
 
         let status_title = WatchUIBuilder::watch_status_indicator(watch_list);
@@ -106,8 +108,18 @@ impl MenuBuilder {
             let _ = menu.append(&MenuItem::with_id(&item_id, &item_text, true, None));
         }
 
-        let _ = menu.append(&MenuItem::with_id("add_watch", "➕ Add Price Watch", true, None));
-        let _ = menu.append(&MenuItem::with_id("manage_watches", "⚙️ Manage Watches", true, None));
+        let _ = menu.append(&MenuItem::with_id(
+            "add_watch",
+            "➕ Add Price Watch",
+            true,
+            None,
+        ));
+        let _ = menu.append(&MenuItem::with_id(
+            "manage_watches",
+            "⚙️ Manage Watches",
+            true,
+            None,
+        ));
         // --------------------------
 
         let _ = menu.append(&PredefinedMenuItem::separator());
@@ -124,41 +136,153 @@ impl MenuBuilder {
         menu
     }
 
+    /// Tab-separated table for paste into Numbers / Excel / editors.
+    pub fn dataframe_as_tsv(df: &DataFrame) -> String {
+        let cols = [
+            "symbol",
+            "name",
+            "price",
+            "unit",
+            "unit_hint",
+            "day_open",
+            "change_day",
+            "pct_day",
+            "direction_day",
+        ];
+
+        let mut out = String::new();
+        out.push_str(&cols.join("\t"));
+        out.push('\n');
+
+        if df.height() == 0 {
+            return out;
+        }
+
+        for i in 0..df.height() {
+            let mut cells = Vec::with_capacity(cols.len());
+            for col_name in &cols {
+                let cell = match df.column(col_name) {
+                    Ok(col) => Self::cell_at(col, i),
+                    Err(_) => String::new(),
+                };
+                cells.push(cell);
+            }
+            out.push_str(&cells.join("\t"));
+            out.push('\n');
+        }
+        out
+    }
+
+    fn cell_at(col: &Column, row: usize) -> String {
+        if let Ok(ca) = col.str()
+            && let Some(s) = ca.get(row)
+        {
+            return s.to_string();
+        }
+        if let Ok(ca) = col.f64() {
+            return match ca.get(row) {
+                Some(v) if v.is_nan() => String::new(),
+                Some(v) => format!("{:.6}", v),
+                None => String::new(),
+            };
+        }
+        String::new()
+    }
+
+    pub fn version_item() -> MenuItem {
+        MenuItem::new(
+            format!(
+                "Version {} · Polars {}",
+                env!("CARGO_PKG_VERSION"),
+                POLARS_VERSION
+            ),
+            false,
+            None,
+        )
+    }
+
     fn item_id(name: &str) -> String {
         name.to_lowercase().replace(' ', "_")
     }
 
-    fn format_price(val: f64) -> String {
-        if val.is_nan() {
-            return "N/A".to_string();
+    fn format_price(price: f64) -> String {
+        if price.is_nan() {
+            return "?".to_string();
         }
-        let formatted = format!("{:.2}", val);
+
+        let formatted = format!("{:.2}", price);
         let parts: Vec<&str> = formatted.split('.').collect();
-        let int_part = parts[0];
-        let dec_part = parts.get(1).copied().unwrap_or("00");
 
-        let formatted_int = int_part
-            .as_bytes()
-            .rchunks(3)
-            .rev()
-            .map(|chunk| std::str::from_utf8(chunk).unwrap())
-            .collect::<Vec<_>>()
-            .join(",");
+        if parts.len() == 2 {
+            let integer_part = parts[0];
+            let decimal_part = parts[1];
 
-        format!("{}.{}", formatted_int, dec_part)
-    }
+            let mut result = String::new();
+            for (i, ch) in integer_part.chars().rev().enumerate() {
+                if i > 0 && i % 3 == 0 {
+                    result.insert(0, '.');
+                }
+                result.insert(0, ch);
+            }
 
-    fn unit_to_currency(unit: &str) -> &'static str {
-        match unit.to_uppercase().as_str() {
-            "EUR" => "€",
-            "USD" => "$",
-            "GBP" => "£",
-            _ => "",
+            format!("{},{}", result, decimal_part)
+        } else {
+            formatted
         }
     }
 
-    fn version_item() -> MenuItem {
-        let text = format!("Polars v{}", POLARS_VERSION);
-        MenuItem::new(&text, false, None)
+    fn unit_to_currency(unit: &str) -> String {
+        match unit {
+            "EUR" => "€".to_string(),
+            "USD" => "$".to_string(),
+            "GBP" => "£".to_string(),
+            "JPY" => "¥".to_string(),
+            _ => unit.to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_includes_app_and_polars() {
+        assert!(!env!("CARGO_PKG_VERSION").is_empty());
+        assert!(!POLARS_VERSION.is_empty());
+    }
+
+    #[test]
+    fn format_price_nan() {
+        assert_eq!(MenuBuilder::format_price(f64::NAN), "?");
+    }
+
+    #[test]
+    fn format_price_thousands() {
+        assert_eq!(MenuBuilder::format_price(1234.56), "1.234,56");
+    }
+
+    #[test]
+    fn item_id_normalizes_name() {
+        assert_eq!(MenuBuilder::item_id("TTF Gas"), "ttf_gas");
+    }
+
+    #[test]
+    fn dataframe_as_tsv_empty_has_header() {
+        let df = DataFrame::new_infer_height(vec![
+            Series::new("symbol".into(), Vec::<String>::new()).into(),
+            Series::new("name".into(), Vec::<String>::new()).into(),
+            Series::new("price".into(), Vec::<f64>::new()).into(),
+            Series::new("unit".into(), Vec::<String>::new()).into(),
+            Series::new("unit_hint".into(), Vec::<String>::new()).into(),
+            Series::new("day_open".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("change_day".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("pct_day".into(), Vec::<Option<f64>>::new()).into(),
+            Series::new("direction_day".into(), Vec::<String>::new()).into(),
+        ])
+        .expect("empty df");
+        let tsv = MenuBuilder::dataframe_as_tsv(&df);
+        assert!(tsv.starts_with("symbol\tname\tprice"));
+        assert_eq!(tsv.lines().count(), 1);
     }
 }

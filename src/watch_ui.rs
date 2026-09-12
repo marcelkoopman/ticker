@@ -6,11 +6,9 @@ use crate::price_watch::{PriceWatch, WatchDirection, WatchList};
 pub struct WatchUIBuilder;
 
 impl WatchUIBuilder {
-    /// Build menu section for price watches.
-    pub fn build_watch_menu(
-        watch_list: &WatchList,
-        _prices_df: &Option<DataFrame>,
-    ) -> Menu {
+    /// Standalone watch submenu (menu is currently built in `MenuBuilder`).
+    #[allow(dead_code)]
+    pub fn build_watch_menu(watch_list: &WatchList, _prices_df: &Option<DataFrame>) -> Menu {
         let menu = Menu::new();
 
         if watch_list.watches.is_empty() {
@@ -25,20 +23,12 @@ impl WatchUIBuilder {
 
                 let item_text = format!(
                     "[{}] {} {} - €{:.2}",
-                    status,
-                    direction_emoji,
-                    watch.asset_name,
-                    watch.target_price
+                    status, direction_emoji, watch.asset_name, watch.target_price
                 );
 
                 let item_id = Self::watch_id(watch);
 
-                let _ = menu.append(&MenuItem::with_id(
-                    &item_id,
-                    &item_text,
-                    true,
-                    None,
-                ));
+                let _ = menu.append(&MenuItem::with_id(&item_id, &item_text, true, None));
             }
         }
 
@@ -62,10 +52,7 @@ impl WatchUIBuilder {
     }
 
     /// Format watch trigger notification.
-    pub fn format_trigger_notification(
-        watch: &PriceWatch,
-        current_price: f64,
-    ) -> String {
+    pub fn format_trigger_notification(watch: &PriceWatch, current_price: f64) -> String {
         let direction_text = match watch.direction {
             WatchDirection::Above => "rose above",
             WatchDirection::Below => "dropped below",
@@ -75,11 +62,7 @@ impl WatchUIBuilder {
             "🔔 {} Price Alert!\n\n\
              {} has {} your watch price of €{:.2}\n\n\
              Current Price: €{:.2}",
-            watch.asset_name,
-            watch.asset_name,
-            direction_text,
-            watch.target_price,
-            current_price
+            watch.asset_name, watch.asset_name, direction_text, watch.target_price, current_price
         )
     }
 
@@ -103,6 +86,7 @@ impl WatchUIBuilder {
     }
 
     /// Generate a unique ID for a watch menu item.
+    #[allow(dead_code)]
     fn watch_id(watch: &PriceWatch) -> String {
         format!(
             "watch_{}_{}",
@@ -128,11 +112,7 @@ impl WatchUIBuilder {
 pub fn send_macos_notification(title: &str, message: &str) {
     use std::process::Command;
 
-    let escape_applescript_string = |value: &str| {
-        value
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-    };
+    let escape_applescript_string = |value: &str| value.replace('\\', "\\\\").replace('"', "\\\"");
 
     let escaped_title = escape_applescript_string(title);
     let escaped_message = escape_applescript_string(message);
@@ -142,9 +122,7 @@ pub fn send_macos_notification(title: &str, message: &str) {
         escaped_message, escaped_title
     );
 
-    let _ = Command::new("osascript")
-        .args(["-e", &script])
-        .status();
+    let _ = Command::new("osascript").args(["-e", &script]).status();
 }
 
 /// No-op notification implementation on non-macOS platforms.
@@ -167,17 +145,9 @@ mod tests {
     fn test_watch_status_indicator_with_watches() {
         let mut list = WatchList::new();
 
-        list.add_watch(
-            "Bitcoin".to_string(),
-            70000.0,
-            WatchDirection::Above,
-        );
+        list.add_watch("Bitcoin".to_string(), 70000.0, WatchDirection::Above);
 
-        list.add_watch(
-            "Bitcoin".to_string(),
-            65000.0,
-            WatchDirection::Below,
-        );
+        list.add_watch("Bitcoin".to_string(), 65000.0, WatchDirection::Below);
 
         let status = WatchUIBuilder::watch_status_indicator(&list);
 
@@ -217,8 +187,7 @@ mod tests {
             triggered: true,
         };
 
-        let notification =
-            WatchUIBuilder::format_trigger_notification(&watch, 71000.0);
+        let notification = WatchUIBuilder::format_trigger_notification(&watch, 71000.0);
 
         assert!(notification.contains("rose above"));
         assert!(notification.contains("70000"));
@@ -235,8 +204,7 @@ mod tests {
             triggered: true,
         };
 
-        let notification =
-            WatchUIBuilder::format_trigger_notification(&watch, 1950.0);
+        let notification = WatchUIBuilder::format_trigger_notification(&watch, 1950.0);
 
         assert!(notification.contains("dropped below"));
         assert!(notification.contains("2000"));

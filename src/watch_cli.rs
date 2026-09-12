@@ -1,4 +1,4 @@
-use crate::price_watch::{load_watch_list, save_watch_list, WatchDirection, WatchList};
+use crate::price_watch::{WatchDirection, WatchList, load_watch_list, save_watch_list};
 use std::error::Error;
 
 pub fn handle_watch_command(args: &[String]) -> Result<String, Box<dyn Error>> {
@@ -19,9 +19,7 @@ pub fn handle_watch_command(args: &[String]) -> Result<String, Box<dyn Error>> {
 
 fn add_watch(args: &[String]) -> Result<String, Box<dyn Error>> {
     if args.len() < 3 {
-        return Err(
-            "Usage: ticker add <asset_name> <target_price> <above|below>".into(),
-        );
+        return Err("Usage: ticker add <asset_name> <target_price> <above|below>".into());
     }
 
     let asset_name = args[0].clone();
@@ -60,9 +58,7 @@ fn add_watch(args: &[String]) -> Result<String, Box<dyn Error>> {
 
 fn remove_watch(args: &[String]) -> Result<String, Box<dyn Error>> {
     if args.len() < 2 {
-        return Err(
-            "Usage: ticker remove <asset_name> <target_price>".into(),
-        );
+        return Err("Usage: ticker remove <asset_name> <target_price>".into());
     }
 
     let asset_name = &args[0];
@@ -124,11 +120,7 @@ fn reset_triggered() -> Result<String, Box<dyn Error>> {
     watch_list.reset_all_states();
     save_watch_list(&watch_list)?;
 
-    let triggered_count = watch_list
-        .watches
-        .iter()
-        .filter(|w| !w.triggered)
-        .count();
+    let triggered_count = watch_list.watches.iter().filter(|w| !w.triggered).count();
 
     Ok(format!(
         "✅ Reset triggered state for {} watches",
@@ -183,7 +175,8 @@ Notes:
   - When a price reaches the watch threshold, a notification will be sent
   - Each watch will only trigger once per day
   - Running without arguments starts the menubar app
-"#.to_string()
+"#
+    .to_string()
 }
 
 #[cfg(test)]
