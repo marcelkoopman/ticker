@@ -62,7 +62,11 @@ impl WatchUIBuilder {
             "🔔 {} Price Alert!\n\n\
              {} has {} your watch price of €{:.2}\n\n\
              Current Price: €{:.2}",
-            watch.asset_name, watch.asset_name, direction_text, watch.target_price, current_price
+            watch.asset_name,
+            watch.asset_name,
+            direction_text,
+            watch.target_price,
+            current_price
         )
     }
 
@@ -85,7 +89,7 @@ impl WatchUIBuilder {
         }
     }
 
-    /// Generate a unique ID for a watch menu item.
+    /// Generate a unique ID for a watch menu item (asset name is lowercased).
     #[allow(dead_code)]
     fn watch_id(watch: &PriceWatch) -> String {
         format!(
@@ -96,6 +100,8 @@ impl WatchUIBuilder {
     }
 
     /// Parse a watch ID back into its asset name and target price.
+    /// Asset name is lowercased (same as `watch_id`); callers should match
+    /// case-insensitively when removing watches.
     pub fn parse_watch_id(id: &str) -> Option<(String, f64)> {
         let value = id.strip_prefix("watch_")?;
         let (asset_name, price_str) = value.rsplit_once('_')?;
@@ -112,7 +118,8 @@ impl WatchUIBuilder {
 pub fn send_macos_notification(title: &str, message: &str) {
     use std::process::Command;
 
-    let escape_applescript_string = |value: &str| value.replace('\\', "\\\\").replace('"', "\\\"");
+    let escape_applescript_string =
+        |value: &str| value.replace('\\', "\\\\").replace('"', "\\\"");
 
     let escaped_title = escape_applescript_string(title);
     let escaped_message = escape_applescript_string(message);
@@ -122,7 +129,9 @@ pub fn send_macos_notification(title: &str, message: &str) {
         escaped_message, escaped_title
     );
 
-    let _ = Command::new("osascript").args(["-e", &script]).status();
+    let _ = Command::new("osascript")
+        .args(["-e", &script])
+        .status();
 }
 
 /// No-op notification implementation on non-macOS platforms.
@@ -167,13 +176,15 @@ mod tests {
         let id = WatchUIBuilder::watch_id(&watch);
 
         assert!(id.starts_with("watch_"));
+        assert!(id.contains("bitcoin"));
 
         let parsed = WatchUIBuilder::parse_watch_id(&id);
         assert!(parsed.is_some());
 
         let (name, price) = parsed.unwrap();
 
-        assert_eq!(name, "Bitcoin");
+        // IDs store a lowercased asset name; remove_watch matches case-insensitively.
+        assert_eq!(name, "bitcoin");
         assert!((price - 70000.5).abs() < 0.01);
     }
 
