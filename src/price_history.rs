@@ -145,4 +145,61 @@ mod tests {
         let loaded = load_day_opens_from(&path);
         assert!(loaded.is_empty());
     }
+
+    #[test]
+    fn day_open_from_other_date_is_ignored() {
+        let path = temp_path("stale_day_open");
+        let _ = fs::remove_file(&path);
+
+        let file = PriceHistoryFile {
+            prices: HashMap::new(),
+            day_opens: HashMap::from([(
+                "Bitcoin".to_string(),
+                DayOpen {
+                    date: "1999-01-01".to_string(),
+                    value: 1.0,
+                },
+            )]),
+        };
+        save_file(&path, &file).unwrap();
+
+        let loaded = load_day_opens_from(&path);
+        assert!(
+            loaded.is_empty(),
+            "opens from another calendar day must be dropped"
+        );
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn save_day_opens_skips_nan_and_zero() {
+        let path = temp_path("skip_nan_zero");
+        let _ = fs::remove_file(&path);
+
+        let mut opens = HashMap::new();
+        opens.insert("Bitcoin".to_string(), f64::NAN);
+        opens.insert("Gold".to_string(), 0.0);
+        opens.insert("Gas".to_string(), 35.5);
+        save_day_opens_to(&path, &opens).unwrap();
+
+        let loaded = load_day_opens_from(&path);
+        assert_eq!(loaded.get("Gas"), Some(&35.5));
+        assert!(!loaded.contains_key("Bitcoin"));
+        assert!(!loaded.contains_key("Gold"));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn last_poll_history_roundtrip() {
+        let path = temp_path("last_poll");
+        let _ = fs::remove_file(&path);
+
+        let mut prices = HashMap::new();
+        prices.insert("Bitcoin".to_string(), 94000.0);
+        save_price_history_to(&path, &prices).unwrap();
+
+        let file = load_file(&path);
+        assert_eq!(file.prices.get("Bitcoin").map(|s| s.value), Some(94000.0));
+        let _ = fs::remove_file(&path);
+    }
 }
