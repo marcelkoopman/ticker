@@ -357,7 +357,11 @@ mod tests {
     fn sample_df() -> DataFrame {
         DataFrame::new_infer_height(vec![
             Series::new("symbol".into(), vec!["💰".to_string(), "⛽".to_string()]).into(),
-            Series::new("name".into(), vec!["Bitcoin".to_string(), "Benzine".to_string()]).into(),
+            Series::new(
+                "name".into(),
+                vec!["Bitcoin".to_string(), "Benzine".to_string()],
+            )
+            .into(),
             Series::new("price".into(), vec![66553.0_f64, 2.47]).into(),
             Series::new("unit".into(), vec!["EUR".to_string(), "EUR".to_string()]).into(),
             Series::new(
