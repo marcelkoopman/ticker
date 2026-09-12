@@ -13,7 +13,7 @@ description: Rules for adding a feature to a Rust project in this repo. Use when
 
 ## Code quality
 
-Quality gates live in git hooks and CI. Do not invent a third checklist.
+Quality gates are hooks and CI. They do **not** run on commits created through the GitHub API (connector `push_files` / `create_or_update_file`). Those commits must already pass rustfmt and clippy.
 
 Local hooks (once per clone: `./scripts/install-git-hooks.sh`):
 
@@ -24,11 +24,13 @@ Do not use `--no-verify` on feature branches unless the hook cannot run (no Rust
 
 CI on the PR must stay green: rustfmt check, clippy `-D warnings`, `cargo test`, cargo-machete.
 
-When writing code (hooks may not run in this environment):
+When writing or pushing code from an agent (hooks will not run):
 
-- Match rustfmt; prefer let-chains / collapsible `if` (Clippy `collapsible_if`).
-- No debug-only dead code that Clippy or machete would reject.
+- Match rustfmt default width. Break long `MenuItem::with_id(...)`, `format!`, and `prompt_text` calls across lines.
+- No unused `pub fn`, unused imports, or debug-only dead code (`-D dead-code` is on).
+- Prefer let-chains / collapsible `if` (Clippy `collapsible_if`).
 - Keep tests green; add tests next to the behavior you change.
+- If `cargo fmt` / `clippy` are available, run them before the PR commit. If they are not, still write as if they ran — do not rely on CI to rewrite the tree.
 
 ## API and modules
 
@@ -38,6 +40,7 @@ When writing code (hooks may not run in this environment):
 ## Before PR / merge
 
 - [ ] Feature branch, not `main`
+- [ ] Diff would pass `cargo fmt -- --check` and `cargo clippy -- -D warnings`
 - [ ] Hooks path installed locally when committing/pushing from a machine with Cargo
 - [ ] CI green on the PR
 - [ ] No unused deps or debug-only dead code
