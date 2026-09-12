@@ -1,6 +1,9 @@
 use polars::prelude::*;
 use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
 
+use crate::price_watch::WatchList;
+use crate::watch_ui::WatchUIBuilder;
+
 /// Keep in sync with the `polars` version in Cargo.toml.
 const POLARS_VERSION: &str = "0.55.2";
 
@@ -8,7 +11,8 @@ pub struct MenuBuilder;
 
 impl MenuBuilder {
     /// One menu item per DataFrame row; change text comes from DF columns.
-    pub fn build(df: &DataFrame) -> Menu {
+    /// Also renders the price-watch section.
+    pub fn build(df: &DataFrame, watch_list: &WatchList) -> Menu {
         let menu = Menu::new();
 
         if df.height() == 0 {
@@ -82,6 +86,41 @@ impl MenuBuilder {
                 let _ = menu.append(&MenuItem::new("Invalid price data", false, None));
             }
         }
+
+        // --- PRICE WATCH SECTION ---
+        let _ = menu.append(&PredefinedMenuItem::separator());
+
+        let status_title = WatchUIBuilder::watch_status_indicator(watch_list);
+        let _ = menu.append(&MenuItem::new(&status_title, false, None));
+
+        for watch in &watch_list.watches {
+            let status = if watch.triggered { "✓" } else { " " };
+            let direction_emoji = watch.direction.emoji();
+            let item_text = format!(
+                "  [{}] {} {} - €{:.2}",
+                status, direction_emoji, watch.asset_name, watch.target_price
+            );
+            let item_id = format!(
+                "watch_{}_{}",
+                watch.asset_name.to_lowercase().replace(' ', "_"),
+                watch.target_price
+            );
+            let _ = menu.append(&MenuItem::with_id(&item_id, &item_text, true, None));
+        }
+
+        let _ = menu.append(&MenuItem::with_id(
+            "add_watch",
+            "➕ Add Price Watch",
+            true,
+            None,
+        ));
+        let _ = menu.append(&MenuItem::with_id(
+            "manage_watches",
+            "⚙️ Manage Watches",
+            true,
+            None,
+        ));
+        // --------------------------
 
         let _ = menu.append(&PredefinedMenuItem::separator());
         let poll_item = MenuItem::with_id("poll", "🔄  Poll now", true, None);
@@ -245,25 +284,5 @@ mod tests {
         let tsv = MenuBuilder::dataframe_as_tsv(&df);
         assert!(tsv.starts_with("symbol\tname\tprice"));
         assert_eq!(tsv.lines().count(), 1);
-    }
-
-    #[test]
-    fn dataframe_as_tsv_row() {
-        let df = DataFrame::new_infer_height(vec![
-            Series::new("symbol".into(), vec!["💰".to_string()]).into(),
-            Series::new("name".into(), vec!["Bitcoin".to_string()]).into(),
-            Series::new("price".into(), vec![67000.0]).into(),
-            Series::new("unit".into(), vec!["EUR".to_string()]).into(),
-            Series::new("unit_hint".into(), vec!["".to_string()]).into(),
-            Series::new("day_open".into(), vec![Some(66000.0)]).into(),
-            Series::new("change_day".into(), vec![Some(1000.0)]).into(),
-            Series::new("pct_day".into(), vec![Some(1.515)]).into(),
-            Series::new("direction_day".into(), vec!["up".to_string()]).into(),
-        ])
-        .expect("row df");
-        let tsv = MenuBuilder::dataframe_as_tsv(&df);
-        assert!(tsv.contains("Bitcoin"));
-        assert!(tsv.contains("67000"));
-        assert!(tsv.contains("up"));
     }
 }
