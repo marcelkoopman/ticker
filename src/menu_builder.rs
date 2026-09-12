@@ -81,7 +81,12 @@ impl MenuBuilder {
             let _ = menu.append(&MenuItem::with_id(&item_id, &item_text, true, None));
         }
 
-        let _ = menu.append(&MenuItem::with_id("add_watch", "➕ Add Price Watch", true, None));
+        let _ = menu.append(&MenuItem::with_id(
+            "add_watch",
+            "➕ Add Price Watch",
+            true,
+            None,
+        ));
         let _ = menu.append(&MenuItem::with_id(
             "manage_watches",
             "⚙️ Manage Watches",
@@ -90,8 +95,18 @@ impl MenuBuilder {
         ));
         let _ = menu.append(&PredefinedMenuItem::separator());
         let _ = menu.append(&MenuItem::with_id("poll", "🔄  Poll now", true, None));
-        let _ = menu.append(&MenuItem::with_id("copy", "📋  Copy to clipboard", true, None));
-        let _ = menu.append(&MenuItem::with_id("edit_asset", "✏️ Edit asset…", true, None));
+        let _ = menu.append(&MenuItem::with_id(
+            "copy",
+            "📋  Copy to clipboard",
+            true,
+            None,
+        ));
+        let _ = menu.append(&MenuItem::with_id(
+            "edit_asset",
+            "✏️ Edit asset…",
+            true,
+            None,
+        ));
         let _ = menu.append(&MenuItem::with_id(
             "reset_assets",
             "↩️ Reset assets to defaults",
