@@ -104,50 +104,29 @@ pub fn reset_user_config() -> Result<Config, Box<dyn Error>> {
     load_config()
 }
 
-/// Switch a fetchable asset to EUR / USD / GBP by rewriting its URL and unit.
-/// Fuel and power feeds are source-locked and return an error.
-pub fn apply_quote_currency(asset: &mut Asset, code: &str) -> Result<(), String> {
-    let code = code.trim().to_uppercase();
-    let lower = code.to_lowercase();
-    if !matches!(code.as_str(), "EUR" | "USD" | "GBP") {
-        return Err(format!("Unsupported currency {code}"));
+/// Overwrite fetch settings for an asset. URL may be a completely different endpoint.
+pub fn apply_asset_edit(
+    asset: &mut Asset,
+    url: &str,
+    unit: &str,
+    price_path: &str,
+) -> Result<(), String> {
+    let url = url.trim();
+    let unit = unit.trim();
+    let price_path = price_path.trim();
+    if url.is_empty() {
+        return Err("URL cannot be empty".into());
     }
-
-    if asset.url.contains("coingecko.com") {
-        asset.url = replace_query_value(&asset.url, "vs_currencies", &lower);
-        if let Some((head, _)) = asset.price_path.rsplit_once('.') {
-            asset.price_path = format!("{head}.{lower}");
-        }
-        asset.unit = code;
-        return Ok(());
+    if unit.is_empty() {
+        return Err("Unit cannot be empty".into());
     }
-
-    if asset.url.contains("xaus.com") {
-        asset.url = replace_query_value(&asset.url, "currency", &code);
-        asset.unit = code;
-        return Ok(());
+    if price_path.is_empty() {
+        return Err("Price path cannot be empty".into());
     }
-
-    Err(format!(
-        "{} is only available in {}",
-        asset.name, asset.unit
-    ))
-}
-
-fn replace_query_value(url: &str, key: &str, value: &str) -> String {
-    let needle = format!("{key}=");
-    if let Some(start) = url.find(&needle) {
-        let val_start = start + needle.len();
-        let val_end = url[val_start..]
-            .find('&')
-            .map(|i| val_start + i)
-            .unwrap_or(url.len());
-        format!("{}{}{}", &url[..val_start], value, &url[val_end..])
-    } else if url.contains('?') {
-        format!("{url}&{key}={value}")
-    } else {
-        format!("{url}?{key}={value}")
-    }
+    asset.url = url.to_string();
+    asset.unit = unit.to_uppercase();
+    asset.price_path = price_path.to_string();
+    Ok(())
 }
 
 fn menubar_pin_path() -> Result<PathBuf, Box<dyn Error>> {
@@ -301,42 +280,24 @@ url = "https://example.com"
     }
 
     #[test]
-    fn apply_quote_currency_coingecko_usd() {
+    fn apply_asset_edit_replaces_url_and_unit() {
         let mut asset = gecko_btc();
-        apply_quote_currency(&mut asset, "usd").unwrap();
+        apply_asset_edit(
+            &mut asset,
+            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
+            "usd",
+            "bitcoin.usd",
+        )
+        .unwrap();
         assert!(asset.url.contains("vs_currencies=usd"));
-        assert!(!asset.url.contains("vs_currencies=eur"));
-        assert_eq!(asset.price_path, "bitcoin.usd");
         assert_eq!(asset.unit, "USD");
+        assert_eq!(asset.price_path, "bitcoin.usd");
     }
 
     #[test]
-    fn apply_quote_currency_xaus() {
-        let mut asset = Asset {
-            name: "Gold".into(),
-            url: "https://xaus.com/api/v1/spot?currency=EUR".into(),
-            price_path: "xau.price".into(),
-            unit: "EUR".into(),
-            unit_hint: "/troy oz".into(),
-            symbol: "🥇".into(),
-        };
-        apply_quote_currency(&mut asset, "GBP").unwrap();
-        assert!(asset.url.contains("currency=GBP"));
-        assert_eq!(asset.unit, "GBP");
-    }
-
-    #[test]
-    fn apply_quote_currency_rejects_locked_feed() {
-        let mut asset = Asset {
-            name: "Benzine".into(),
-            url: "https://eurooilwatch.com/api/v1/prices".into(),
-            price_path: "countries.countryCode=NL.petrolPrice".into(),
-            unit: "EUR".into(),
-            unit_hint: "/L".into(),
-            symbol: "⛽".into(),
-        };
-        assert!(apply_quote_currency(&mut asset, "USD").is_err());
-        assert_eq!(asset.unit, "EUR");
+    fn apply_asset_edit_rejects_empty_url() {
+        let mut asset = gecko_btc();
+        assert!(apply_asset_edit(&mut asset, "  ", "USD", "bitcoin.usd").is_err());
     }
 
     #[test]
@@ -350,10 +311,17 @@ url = "https://example.com"
             std::env::set_var("TICKER_USER_CONFIG_PATH", &path);
         }
         let mut config = parse_config(sample_toml()).unwrap();
-        apply_quote_currency(&mut config.assets[0], "USD").unwrap();
+        apply_asset_edit(
+            &mut config.assets[0],
+            "https://example.com/btc-usd",
+            "USD",
+            "bitcoin.usd",
+        )
+        .unwrap();
         save_user_config(&config).unwrap();
         let loaded = load_config_from(&path).unwrap();
         assert_eq!(loaded.assets[0].unit, "USD");
+        assert_eq!(loaded.assets[0].url, "https://example.com/btc-usd");
         reset_user_config().unwrap();
         assert!(!path.exists());
         unsafe {
