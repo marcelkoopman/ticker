@@ -1,309 +1,60 @@
-use image::ImageReader;
-use polars::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::rc::Rc;
-use std::time::{Duration, SystemTime};
-use tray_icon::{
-    Icon, TrayIcon, TrayIconBuilder,
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
-};
-use winit::{
-    application::ApplicationHandler,
-    event::WindowEvent,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-};
 
-use crate::config::load_config;
+use image::ImageFormat;
+use polars::prelude::*;
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use winit::event_loop::{ControlFlow, EventLoopBuilder};
+
 use crate::menu_builder::MenuBuilder;
-use crate::price_fetcher::PriceFetcher;
-use crate::price_history;
-use crate::price_watch::{self, WatchList, WatchDirection};
-use crate::watch_ui::{WatchUIBuilder, send_macos_notification};
+use crate::price_watch::WatchList;
 
-/// Fixed poll interval for all assets.
-const POLL_INTERVAL: Duration = Duration::from_secs(5 * 60);
-
-struct App {
-    tray: Rc<RefCell<TrayIcon>>,
-    fetcher: Option<PriceFetcher>,
-    config: Option<crate::config::Config>,
-    /// Latest prices DataFrame (incl. poll change + day change columns).
+pub struct MenuBarApp {
+    tray: RefCell<Option<TrayIcon>>,
     prices_df: Option<DataFrame>,
-    links: HashMap<String, String>,
-    next_check: SystemTime,
     normal_icon: Icon,
     alert_icon: Icon,
-    config_loaded: bool,
-    config_error: Option<String>,
-    /// Price watch list and state
     watch_list: WatchList,
 }
 
-impl ApplicationHandler for App {
-    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
+impl MenuBarApp {
+    pub fn new() -> Self {
+        let normal_icon = Self::create_fallback_icon(255, 255, 255); // Wit icoon
+        let alert_icon = Self::create_fallback_icon(255, 0, 0);     // Rood icoon
 
-    fn window_event(
-        &mut self,
-        _event_loop: &ActiveEventLoop,
-        _id: winit::window::WindowId,
-        _event: WindowEvent,
-    ) {
+        let watch_list = WatchList::new();
+
+        let tray = TrayIconBuilder::new()
+            .with_tooltip("Crypto & Asset Tracker")
+            .with_icon(normal_icon.clone())
+            .build()
+            .ok();
+
+        let app = Self {
+            tray: RefCell::new(tray),
+            prices_df: None,
+            normal_icon,
+            alert_icon,
+            watch_list,
+        };
+
+        app.update_menu();
+        app
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.config_loaded {
-            self.config_loaded = true;
-
-            eprintln!("📂 Loading config...");
-
-            match load_config() {
-                Ok(config) => {
-                    eprintln!("✓ Config loaded successfully");
-                    self.config = Some(config);
-                    self.config_error = None;
-
-                    // Load price watches
-                    match price_watch::load_watch_list() {
-                        Ok(watches) => {
-                            eprintln!("📊 Loaded {} price watches", watches.watches.len());
-                            self.watch_list = watches;
-                        }
-                        Err(e) => {
-                            eprintln!("⚠️  Failed to load watches: {}", e);
-                        }
-                    }
-
-                    if self.fetcher.is_some() {
-                        eprintln!("💰 Fetching initial prices...");
-                        self.poll_prices();
-                        self.schedule_next_poll();
-                    }
-                }
-                Err(e) => {
-                    eprintln!("✗ Failed to load config: {}", e);
-                    self.config_error = Some(format!("Config error: {}", e));
-                    self.update_error_menu();
-                }
-            }
-
-            return;
-        }
-
-        while let Ok(event) = MenuEvent::receiver().try_recv() {
-            match event.id.0.as_str() {
-                "quit" => event_loop.exit(),
-                "poll" => {
-                    eprintln!("🔄 Manual poll triggered");
-                    if self.config.is_some() {
-                        self.poll_prices();
-                        self.schedule_next_poll();
-                    } else {
-                        eprintln!("⚠️  Cannot poll: config not loaded");
-                    }
-                }
-                "copy" => {
-                    self.copy_prices_to_clipboard();
-                }
-                "add_watch" => {
-                    eprintln!("➕ Add watch triggered");
-                    self.show_add_watch_prompt();
-                }
-                "manage_watches" => {
-                    eprintln!("⚙️  Manage watches triggered");
-                    self.show_manage_watches_menu();
-                }
-                id => {
-                    if let Some(url) = self.links.get(id) {
-                        let _ = webbrowser::open(url);
+    pub fn update_prices(&mut self, df: DataFrame) {
+        if let (Ok(names), Ok(prices)) = (df.column("name"), df.column("price")) {
+            if let (Ok(names_str), Ok(prices_f64)) = (names.str(), prices.f64()) {
+                for i in 0..df.height() {
+                    if let (Some(name), Some(price)) = (names_str.get(i), prices_f64.get(i)) {
+                        self.watch_list.check_price(name, price);
                     }
                 }
             }
-        }
-
-        if self.config.is_some() && SystemTime::now() >= self.next_check {
-            eprintln!("⏰ Auto-poll triggered (every 5 minutes)");
-            self.poll_prices();
-            self.schedule_next_poll();
-        }
-
-        if let Ok(duration) = self.next_check.duration_since(SystemTime::now()) {
-            event_loop
-                .set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + duration));
-        } else {
-            event_loop.set_control_flow(ControlFlow::Wait);
-        }
-    }
-}
-
-impl App {
-    fn copy_prices_to_clipboard(&self) {
-        let empty = DataFrame::new_infer_height(vec![
-            Series::new("symbol".into(), Vec::<String>::new()).into(),
-            Series::new("name".into(), Vec::<String>::new()).into(),
-            Series::new("price".into(), Vec::<f64>::new()).into(),
-            Series::new("unit".into(), Vec::<String>::new()).into(),
-            Series::new("unit_hint".into(), Vec::<String>::new()).into(),
-            Series::new("day_open".into(), Vec::<Option<f64>>::new()).into(),
-            Series::new("change_day".into(), Vec::<Option<f64>>::new()).into(),
-            Series::new("pct_day".into(), Vec::<Option<f64>>::new()).into(),
-            Series::new("direction_day".into(), Vec::<String>::new()).into(),
-        ])
-        .expect("empty dataframe");
-
-        let df = self.prices_df.as_ref().unwrap_or(&empty);
-        let tsv = MenuBuilder::dataframe_as_tsv(df);
-
-        match arboard::Clipboard::new() {
-            Ok(mut clipboard) => match clipboard.set_text(tsv) {
-                Ok(()) => eprintln!("📋 Copied {} price row(s) to clipboard (TSV)", df.height()),
-                Err(e) => eprintln!("✗ Failed to set clipboard text: {}", e),
-            },
-            Err(e) => eprintln!("✗ Failed to open clipboard: {}", e),
-        }
-    }
-
-    fn show_add_watch_prompt(&self) {
-        eprintln!("📝 TODO: Show dialog to add watch");
-        // In a real implementation, this would open a native dialog
-        // For now, we log it and users can add watches programmatically
-    }
-
-    fn show_manage_watches_menu(&self) {
-        eprintln!("📋 TODO: Show manage watches menu");
-        // In a real implementation, this would show watch management UI
-    }
-
-    fn poll_prices(&mut self) {
-        let Some(config) = &self.config else {
-            return;
-        };
-        let Some(fetcher) = &self.fetcher else {
-            return;
-        };
-
-        // Day opens for the local calendar day (empty on first run / new day).
-        let day_opens = price_history::load_day_opens();
-
-        let result = match &self.prices_df {
-            None => {
-                eprintln!("📊 First poll — constructing DataFrame");
-                fetcher.build_initial_dataframe(&config.assets, &day_opens)
-            }
-            Some(previous) => {
-                eprintln!("📊 Updating existing DataFrame");
-                fetcher.update_dataframe(previous, &config.assets, &day_opens)
-            }
-        };
-
-        let df = match result {
-            Ok(df) => df,
-            Err(e) => {
-                eprintln!("✗ Poll failed: {}", e);
-                return;
-            }
-        };
-
-        // Check price watches
-        self.check_and_trigger_watches(&df);
-
-        // Persist last-poll prices (legacy baseline).
-        let mut history = HashMap::new();
-        // Persist day opens (first price of today per asset).
-        let mut opens = HashMap::new();
-        if let (Ok(names), Ok(prices), Ok(day_open_col)) =
-            (df.column("name"), df.column("price"), df.column("day_open"))
-            && let (Ok(name_ca), Ok(price_ca), Ok(open_ca)) =
-                (names.str(), prices.f64(), day_open_col.f64())
-        {
-            for i in 0..df.height() {
-                if let (Some(name), Some(price)) = (name_ca.get(i), price_ca.get(i))
-                    && !price.is_nan()
-                {
-                    history.insert(name.to_string(), price);
-                }
-                if let (Some(name), Some(open)) = (name_ca.get(i), open_ca.get(i))
-                    && !open.is_nan()
-                {
-                    opens.insert(name.to_string(), open);
-                }
-            }
-        }
-        if !history.is_empty()
-            && let Err(e) = price_history::save_price_history(&history)
-        {
-            eprintln!("⚠️  Failed to save price history: {}", e);
-        }
-        if !opens.is_empty()
-            && let Err(e) = price_history::save_day_opens(&opens)
-        {
-            eprintln!("⚠️  Failed to save day opens: {}", e);
         }
 
         self.prices_df = Some(df);
         self.update_menu();
-    }
-
-    fn check_and_trigger_watches(&mut self, df: &DataFrame) {
-        let Ok(names) = df.column("name") else {
-            return;
-        };
-        let Ok(prices) = df.column("price") else {
-            return;
-        };
-        let Ok(name_ca) = names.str() else {
-            return;
-        };
-        let Ok(price_ca) = prices.f64() else {
-            return;
-        };
-
-        for i in 0..df.height() {
-            if let (Some(asset_name), Some(current_price)) = (name_ca.get(i), price_ca.get(i))
-                && !current_price.is_nan()
-            {
-                let triggered = self.watch_list.check_price(asset_name, current_price);
-
-                for watch in triggered {
-                    let notification = WatchUIBuilder::format_trigger_notification(&watch, current_price);
-                    eprintln!("🔔 Watch triggered: {}", notification);
-                    send_macos_notification(&watch.asset_name, &notification);
-                }
-            }
-        }
-
-        // Save updated watch list
-        if let Err(e) = price_watch::save_watch_list(&self.watch_list) {
-            eprintln!("⚠️  Failed to save watch list: {}", e);
-        }
-    }
-
-    fn schedule_next_poll(&mut self) {
-        self.next_check = SystemTime::now() + POLL_INTERVAL;
-        eprintln!("⏱️  Next poll in {}s", POLL_INTERVAL.as_secs());
-    }
-
-    fn has_changes(&self) -> bool {
-        let Some(df) = &self.prices_df else {
-            return false;
-        };
-        let Ok(directions) = df.column("direction_day") else {
-            return false;
-        };
-        let Ok(dir_ca) = directions.str() else {
-            return false;
-        };
-
-        for i in 0..df.height() {
-            match dir_ca.get(i) {
-                Some("up") | Some("down") => return true,
-                _ => {}
-            }
-        }
-
-        // Also check if any watches are triggered
-        self.watch_list.watches.iter().any(|w| w.triggered)
     }
 
     fn update_menu(&self) {
@@ -325,151 +76,62 @@ impl App {
         .expect("empty dataframe");
 
         let df = self.prices_df.clone().unwrap_or(empty);
-        let mut menu = MenuBuilder::build(&df);
+        let menu = MenuBuilder::build(&df, &self.watch_list);
 
-        // Add watches section if there are any
-        if !self.watch_list.watches.is_empty() {
-            let _ = menu.append(&PredefinedMenuItem::separator());
-            let _ = menu.append(&MenuItem::new(
-                &WatchUIBuilder::watch_status_indicator(&self.watch_list),
-                false,
-                None,
-            ));
-            let _ = menu.append(&MenuItem::with_id(
-                "add_watch",
-                "➕ Add Price Watch",
-                true,
-                None,
-            ));
-            let _ = menu.append(&MenuItem::with_id(
-                "manage_watches",
-                "⚙️  Manage Watches",
-                true,
-                None,
-            ));
-        }
+        if let Ok(mut tray_opt) = self.tray.try_borrow_mut() {
+            if let Some(tray) = tray_opt.as_mut() {
+                let _ = tray.set_menu(Some(Box::new(menu)));
 
-        if let Ok(tray) = self.tray.try_borrow_mut() {
-            tray.set_menu(Some(Box::new(menu)));
+                let icon = if self.has_changes() {
+                    self.alert_icon.clone()
+                } else {
+                    self.normal_icon.clone()
+                };
 
-            let icon = if self.has_changes() {
-                self.alert_icon.clone()
-            } else {
-                self.normal_icon.clone()
-            };
-
-            let _ = tray.set_icon(Some(icon));
-            tray.set_title(Some("Ticker"));
+                let _ = tray.set_icon(Some(icon));
+                let _ = tray.set_title(Some("Ticker"));
+            }
         }
     }
 
-    fn update_error_menu(&self) {
-        let menu = Menu::new();
-
-        if let Some(error) = &self.config_error {
-            let _ = menu.append(&MenuItem::new(format!("❌ {}", error), false, None));
-        } else {
-            let _ = menu.append(&MenuItem::new("⏳ Loading config...", false, None));
-        }
-
-        let _ = menu.append(&PredefinedMenuItem::separator());
-        let _ = menu.append(&MenuItem::with_id("poll", "🔄 Retry", true, None));
-        let _ = menu.append(&PredefinedMenuItem::separator());
-        let _ = menu.append(&MenuBuilder::version_item());
-        let _ = menu.append(&MenuItem::with_id("quit", " Quit", true, None));
-
-        if let Ok(tray) = self.tray.try_borrow_mut() {
-            tray.set_menu(Some(Box::new(menu)));
-        }
-    }
-}
-
-fn bundle_assets_dir() -> PathBuf {
-    if let Ok(exe_path) = std::env::current_exe()
-        && let Some(app_dir) = exe_path.ancestors().find(|p| {
-            p.file_name()
-                .and_then(|name| name.to_str())
-                .map(|name| name.ends_with(".app"))
-                .unwrap_or(false)
-        })
-    {
-        let assets = app_dir.join("Contents/Resources/assets");
-        if assets.exists() {
-            return assets;
-        }
+    fn has_changes(&self) -> bool {
+        self.watch_list.watches.iter().any(|w| w.triggered)
     }
 
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
-}
+    fn create_fallback_icon(r: u8, g: u8, b: u8) -> Icon {
+        let width = 16;
+        let height = 16;
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
 
-fn load_icon(filename: &str) -> Result<Icon, Box<dyn std::error::Error>> {
-    let assets_dir = bundle_assets_dir();
-    let icon_path = assets_dir.join(filename);
+        for _ in 0..(width * height) {
+            rgba.push(r);
+            rgba.push(g);
+            rgba.push(b);
+            rgba.push(255); // Alpha
+        }
 
-    eprintln!("📁 Loading icon from: {:?}", icon_path);
+        Icon::from_rgba(rgba, width, height).expect("Failed to create icon")
+    }
 
-    let image = ImageReader::open(&icon_path)?.decode()?.to_rgba8();
-    let (width, height) = image.dimensions();
-    let icon = Icon::from_rgba(image.into_raw(), width, height)?;
-    Ok(icon)
+    pub fn load_icon_from_memory(bytes: &[u8]) -> Icon {
+        let image = image::load_from_memory_with_format(bytes, ImageFormat::Png)
+            .expect("Failed to open icon path")
+            .into_rgba8();
+
+        let (width, height) = image.dimensions();
+        let rgba = image.into_raw();
+
+        Icon::from_rgba(rgba, width, height).expect("Failed to open icon")
+    }
 }
 
 pub fn run_menubar() -> Result<(), Box<dyn std::error::Error>> {
-    eprintln!("🎯 Ticker app started");
+    let event_loop = EventLoopBuilder::new().build()?;
+    let _app = MenuBarApp::new();
 
-    let fetcher = PriceFetcher::new()?;
+    event_loop.run(move |_event, target| {
+        target.set_control_flow(ControlFlow::Wait);
+    })?;
 
-    eprintln!("📁 Loading icons...");
-    let normal_icon = load_icon("normal.png")?;
-    let alert_icon = load_icon("update.png")?;
-
-    let mut links = HashMap::new();
-    links.insert("bitcoin".to_string(), "https://bitcoin.nl".to_string());
-    links.insert("eth".to_string(), "https://bitcoin.nl".to_string());
-    links.insert("gold".to_string(), "https://xaus.com".to_string());
-    links.insert("gas".to_string(), "https://eurooilwatch.com".to_string());
-    links.insert(
-        "benzine".to_string(),
-        "https://eurooilwatch.com".to_string(),
-    );
-    links.insert("diesel".to_string(), "https://eurooilwatch.com".to_string());
-
-    eprintln!("🎨 Creating initial menubar...");
-    let initial_menu = Menu::new();
-    let _ = initial_menu.append(&MenuItem::new("⏳ Loading config...", false, None));
-    let _ = initial_menu.append(&PredefinedMenuItem::separator());
-    let _ = initial_menu.append(&MenuItem::with_id("poll", "🔄 Retry", true, None));
-    let _ = initial_menu.append(&PredefinedMenuItem::separator());
-    let _ = initial_menu.append(&MenuBuilder::version_item());
-    let _ = initial_menu.append(&MenuItem::with_id("quit", " Quit", true, None));
-
-    let tray_icon = TrayIconBuilder::new()
-        .with_menu(Box::new(initial_menu))
-        .with_icon(normal_icon.clone())
-        .with_tooltip("Price Ticker")
-        .with_title("Ticker")
-        .build()?;
-
-    eprintln!("✓ Menubar is visible");
-
-    let tray = Rc::new(RefCell::new(tray_icon));
-    let event_loop = EventLoop::new()?;
-
-    let mut app = App {
-        tray,
-        fetcher: Some(fetcher),
-        config: None,
-        prices_df: None,
-        links,
-        next_check: SystemTime::now(),
-        normal_icon,
-        alert_icon,
-        config_loaded: false,
-        config_error: None,
-        watch_list: WatchList::new(),
-    };
-
-    eprintln!("🚀 Starting event loop...");
-    event_loop.run_app(&mut app)?;
     Ok(())
 }
