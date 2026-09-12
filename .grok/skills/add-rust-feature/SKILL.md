@@ -11,12 +11,24 @@ description: Rules for adding a feature to a Rust project in this repo. Use when
 - Do not land unfinished or placeholder code on `main`.
 - Open a PR into `main` when the feature is ready.
 
-## Code quality (always)
+## Code quality
 
-- Run `cargo fmt` before committing (CI uses `cargo fmt -- --check`).
-- Run `cargo clippy -- -D warnings` and fix all findings.
-- Run `cargo test` and keep tests green.
-- Prefer let-chains / collapsible `if` where Clippy expects them (avoid nested `if` that Clippy flags as `collapsible_if`).
+Quality gates live in git hooks and CI. Do not invent a third checklist.
+
+Local hooks (once per clone: `./scripts/install-git-hooks.sh`):
+
+- **pre-commit** — `cargo fmt --all` (restages formatted, already-staged `.rs` files)
+- **pre-push** — `cargo clippy -- -D warnings` then `cargo test`
+
+Do not use `--no-verify` on feature branches unless the hook cannot run (no Rust toolchain).
+
+CI on the PR must stay green: rustfmt check, clippy `-D warnings`, `cargo test`, cargo-machete.
+
+When writing code (hooks may not run in this environment):
+
+- Match rustfmt; prefer let-chains / collapsible `if` (Clippy `collapsible_if`).
+- No debug-only dead code that Clippy or machete would reject.
+- Keep tests green; add tests next to the behavior you change.
 
 ## API and modules
 
@@ -25,11 +37,10 @@ description: Rules for adding a feature to a Rust project in this repo. Use when
 
 ## Before PR / merge
 
-- [ ] `cargo fmt -- --check`
-- [ ] `cargo clippy -- -D warnings`
-- [ ] `cargo test`
+- [ ] Feature branch, not `main`
+- [ ] Hooks path installed locally when committing/pushing from a machine with Cargo
 - [ ] CI green on the PR
-- [ ] No debug-only dead code that Clippy or machete would reject
+- [ ] No unused deps or debug-only dead code
 
 ## PR hygiene
 
