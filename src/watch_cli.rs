@@ -32,7 +32,6 @@ fn add_watch(args: &[String]) -> Result<String, Box<dyn Error>> {
 
     let mut watch_list = load_watch_list()?;
 
-    // Check if watch already exists
     if watch_list
         .watches
         .iter()
@@ -95,8 +94,7 @@ fn list_watches() -> Result<String, Box<dyn Error>> {
         let direction_emoji = watch.direction.emoji();
         let direction_text = watch.direction.as_str();
         output.push_str(&format!(
-            "{}. [{}] {} {} - €{:.2} ({})
-",
+            "{}. [{}] {} {} - €{:.2} ({})\n",
             i + 1,
             status,
             direction_emoji,
@@ -182,6 +180,33 @@ Notes:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static WATCH_CLI_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_temp_watch_file<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = WATCH_CLI_LOCK.lock().unwrap();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ticker-cli-watches-{stamp}.json"));
+        let _ = std::fs::remove_file(&path);
+        // SAFETY: serialized by WATCH_CLI_LOCK for the duration of the closure.
+        unsafe {
+            std::env::set_var("TICKER_WATCHES_PATH", &path);
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        let _ = std::fs::remove_file(&path);
+        unsafe {
+            std::env::remove_var("TICKER_WATCHES_PATH");
+        }
+        match result {
+            Ok(v) => v,
+            Err(e) => std::panic::resume_unwind(e),
+        }
+    }
 
     #[test]
     fn test_help_text_is_not_empty() {
@@ -190,5 +215,89 @@ mod tests {
         assert!(help.contains("add"));
         assert!(help.contains("remove"));
         assert!(help.contains("list"));
+    }
+
+    #[test]
+    fn help_command_aliases() {
+        for cmd in ["help", "--help", "-h"] {
+            let out = handle_watch_command(&[cmd.to_string()]).unwrap();
+            assert!(out.contains("Usage"));
+        }
+    }
+
+    #[test]
+    fn unknown_command_errors() {
+        let err = handle_watch_command(&["nope".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("Unknown command"));
+    }
+
+    #[test]
+    fn empty_args_error() {
+        assert!(handle_watch_command(&[]).is_err());
+    }
+
+    #[test]
+    fn add_list_remove_roundtrip() {
+        with_temp_watch_file(|| {
+            let added = handle_watch_command(&[
+                "add".into(),
+                "Bitcoin".into(),
+                "68000".into(),
+                "above".into(),
+            ])
+            .unwrap();
+            assert!(added.contains("Bitcoin"));
+
+            let listed = handle_watch_command(&["list".into()]).unwrap();
+            assert!(listed.contains("Bitcoin"));
+            assert!(listed.contains("68000"));
+
+            let dup = handle_watch_command(&[
+                "add".into(),
+                "Bitcoin".into(),
+                "68000".into(),
+                "above".into(),
+            ]);
+            assert!(dup.is_err());
+
+            let removed =
+                handle_watch_command(&["remove".into(), "Bitcoin".into(), "68000".into()]).unwrap();
+            assert!(removed.contains("Removed"));
+
+            let listed = handle_watch_command(&["list".into()]).unwrap();
+            assert!(listed.contains("No price watches"));
+        });
+    }
+
+    #[test]
+    fn add_rejects_bad_direction() {
+        with_temp_watch_file(|| {
+            let err = handle_watch_command(&[
+                "add".into(),
+                "Gold".into(),
+                "2000".into(),
+                "sideways".into(),
+            ])
+            .unwrap_err();
+            assert!(err.to_string().contains("above") || err.to_string().contains("below"));
+        });
+    }
+
+    #[test]
+    fn add_requires_three_args() {
+        let err = handle_watch_command(&["add".into(), "Bitcoin".into()]).unwrap_err();
+        assert!(err.to_string().contains("Usage"));
+    }
+
+    #[test]
+    fn clear_empties_list() {
+        with_temp_watch_file(|| {
+            handle_watch_command(&["add".into(), "Gold".into(), "2000".into(), "below".into()])
+                .unwrap();
+            let cleared = handle_watch_command(&["clear".into()]).unwrap();
+            assert!(cleared.contains("cleared"));
+            let listed = handle_watch_command(&["list".into()]).unwrap();
+            assert!(listed.contains("No price watches"));
+        });
     }
 }
