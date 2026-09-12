@@ -260,12 +260,8 @@ mod tests {
             ]);
             assert!(dup.is_err());
 
-            let removed = handle_watch_command(&[
-                "remove".into(),
-                "Bitcoin".into(),
-                "68000".into(),
-            ])
-            .unwrap();
+            let removed =
+                handle_watch_command(&["remove".into(), "Bitcoin".into(), "68000".into()]).unwrap();
             assert!(removed.contains("Removed"));
 
             let listed = handle_watch_command(&["list".into()]).unwrap();
@@ -296,13 +292,8 @@ mod tests {
     #[test]
     fn clear_empties_list() {
         with_temp_watch_file(|| {
-            handle_watch_command(&[
-                "add".into(),
-                "Gold".into(),
-                "2000".into(),
-                "below".into(),
-            ])
-            .unwrap();
+            handle_watch_command(&["add".into(), "Gold".into(), "2000".into(), "below".into()])
+                .unwrap();
             let cleared = handle_watch_command(&["clear".into()]).unwrap();
             assert!(cleared.contains("cleared"));
             let listed = handle_watch_command(&["list".into()]).unwrap();
